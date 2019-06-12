@@ -155,3 +155,5 @@ endif
 ifdef CONFIG_EFI
 obj-$(CONFIG_IMA)			+= ima_arch.o
 endif
+
+obj-y += async_crossing.o

@@ -209,6 +209,12 @@ config X86
 	select VIRT_TO_BUS
 	select X86_FEATURE_NAMES		if PROC_FS
 
+config ASYNC_CROSSING
+	bool "Asynchronous Crossing"
+	default y
+	---help---
+	  Asynchronously crossing back to user space.
+
 config INSTRUCTION_DECODER
 	def_bool y
 	depends on KPROBES || PERF_EVENTS || UPROBES
