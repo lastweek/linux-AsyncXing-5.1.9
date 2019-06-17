@@ -2627,6 +2627,9 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 {
 	int i, alloced = 0;
 
+	trace_printk("CPU %d Node %d. args(order=%u count=%lu migratetype=%d)",
+		smp_processor_id(), numa_node_id(), order, count, migratetype);
+
 	spin_lock(&zone->lock);
 	for (i = 0; i < count; ++i) {
 		struct page *page = __rmqueue(zone, order, migratetype,
