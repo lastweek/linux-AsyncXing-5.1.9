@@ -7,9 +7,6 @@
 
 #include <uapi/linux/async_crossing.h>
 
-struct async_crossing_info {
-	unsigned long	jmp_user_address;
-	unsigned long	flags;
-};
+void setup_asyncx_jmp(struct pt_regs *regs, unsigned long address);
 
 #endif /* _LINUX_ASYNC_CROSSING_H_ */

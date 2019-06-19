@@ -12,11 +12,9 @@ enum async_crossing_cmd {
 	ASYNCX_GET,
 };
 
-union async_crossing_attr {
-	struct {
-		unsigned long user_addr;
-		unsigned long flags;
-	};
+struct async_crossing_info {
+	unsigned long	flags;
+	unsigned long	jmp_user_address;
 };
 
 #endif /* _LINUX_UAPI_ASYNC_CROSSING_H_ */

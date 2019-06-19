@@ -18,6 +18,7 @@
 #include <linux/uaccess.h>		/* faulthandler_disabled()	*/
 #include <linux/efi.h>			/* efi_recover_from_page_fault()*/
 #include <linux/mm_types.h>
+#include <linux/async_crossing.h>
 
 #include <asm/cpufeature.h>		/* boot_cpu_has, ...		*/
 #include <asm/traps.h>			/* dotraplinkage, ...		*/
@@ -1569,5 +1570,12 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
 
 	__do_page_fault(regs, error_code, address);
 	exception_exit(prev_state);
+
+	/*
+	 * We should only do this for pgfaults came from
+	 * userspace which will also return to userspace.
+	 */
+	if (user_mode(regs))
+		setup_asyncx_jmp(regs, address);
 }
 NOKPROBE_SYMBOL(do_page_fault);
