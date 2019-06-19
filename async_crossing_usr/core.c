@@ -59,6 +59,14 @@ static int syscall_async_crossing(int cmd, struct async_crossing_info *aci)
 	return ret;
 }
 
+static void unset_async_crossing(struct async_crossing_info *aci)
+{
+	int ret;
+	ret = syscall_async_crossing(ASYNCX_UNSET, aci);
+	if (ret)
+		perror("UNSET");
+}
+
 static void libpoll_entry(void)
 {
 	printf("We are here!\n");
@@ -75,6 +83,11 @@ int main(void)
 
 	getcpu(&cpu, &node);
 	printf("Running on cpu: %d, node: %d\n", cpu, node);
+
+	/*
+	 * Set the jmp address and then verify.
+	 * Bail out if things went wrong.
+	 */
 
 	jmp_user_address = (unsigned long)libpoll_entry;
 
@@ -96,8 +109,11 @@ int main(void)
 	if (aci.jmp_user_address != jmp_user_address) {
 		printf("** Error - Broken ASYNC_CROSSING syscall.\n"
 		       "**      SET addr: %#lx\n"
-		       "**      GET addr: %#lx\n"
-		);
+		       "**      GET addr: %#lx\n",
+		       jmp_user_address,
+		       aci.jmp_user_address);
+
+		unset_async_crossing(&aci);
 		return -EINVAL;
 	}
 
