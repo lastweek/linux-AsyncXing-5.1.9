@@ -1572,10 +1572,11 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
 	exception_exit(prev_state);
 
 	/*
+	 * HACK: Async Crossing
 	 * We should only do this for pgfaults came from
 	 * userspace which will also return to userspace.
 	 */
 	if (user_mode(regs))
-		setup_asyncx_jmp(regs, address);
+		asyncx_post_pgfault(regs, address);
 }
 NOKPROBE_SYMBOL(do_page_fault);
