@@ -1471,6 +1471,12 @@ good_area:
 	 * userland). The return to userland is identified whenever
 	 * FAULT_FLAG_USER|FAULT_FLAG_KILLABLE are both set in flags.
 	 */
+
+	if (user_mode(regs)) {
+		if (asyncx_intercept_do_page_fault(vma, address, flags))
+			return;
+	}
+
 	fault = handle_mm_fault(vma, address, flags);
 	major |= fault & VM_FAULT_MAJOR;
 

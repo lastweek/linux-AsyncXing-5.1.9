@@ -15,38 +15,39 @@
 #include <linux/uaccess.h>
 #include <linux/async_crossing.h>
 
-static int
-default_asyncx_syscall(int cmd, struct async_crossing_info __user * uinfo)
+int default_dummy_asyncx_syscall(int cmd, struct async_crossing_info __user * uinfo)
 {
 	return -ENOSYS;
 }
+EXPORT_SYMBOL(default_dummy_asyncx_syscall);
 
-static void default_asyncx_post_pgfault(struct pt_regs *regs,
-					unsigned long address)
+void default_dummy_asyncx_post_pgfault(struct pt_regs *regs,
+				       unsigned long address)
 {
 
 }
+EXPORT_SYMBOL(default_dummy_asyncx_post_pgfault);
 
-/* Constant, used to recover */
-static struct asyncx_callbacks acb_default = {
-	.syscall		= default_asyncx_syscall,
-	.post_pgfault_callback	= default_asyncx_post_pgfault,
+int default_dummy_intercept(struct vm_area_struct *vma,
+			    unsigned long address, unsigned int flags)
+{
+	return 0;
+}
+EXPORT_SYMBOL(default_dummy_intercept);
+
+/* Constant, used when user unregister */
+static const struct asyncx_callbacks acb_default = {
+	.syscall			= default_dummy_asyncx_syscall,
+	.intercept_do_page_fault	= default_dummy_intercept,
+	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
 };
 
 /* Used during runtime */
 struct asyncx_callbacks acb_live = {
-	.syscall		= default_asyncx_syscall,
-	.post_pgfault_callback	= default_asyncx_post_pgfault,
+	.syscall			= default_dummy_asyncx_syscall,
+	.intercept_do_page_fault	= default_dummy_intercept,
+	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
 };
-
-/*
- * Called when pgfault has finished processing and prepared
- * to return to userspace.
- */
-void asyncx_post_pgfault(struct pt_regs *regs, unsigned long address)
-{
-	acb_live.post_pgfault_callback(regs, address);
-}
 
 SYSCALL_DEFINE2(async_crossing, int, cmd, struct async_crossing_info __user *, uinfo)
 {

@@ -86,8 +86,11 @@ static inline void delegate(struct task_struct *tsk,
 /*
  * @regs: user registers upon fault
  * @address: the faulting virtual address
+ *
+ * This function was mainly used for testing during early stage.
  */
-static void cb_pgfault(struct pt_regs *regs, unsigned long address)
+__used
+static void cb_post_pgfault(struct pt_regs *regs, unsigned long address)
 {
 	struct async_crossing_info *aci;
 	struct shared_page_meta *user_page;
@@ -113,6 +116,17 @@ static void cb_pgfault(struct pt_regs *regs, unsigned long address)
 	/* Replace with user register IP and SP */
 	regs->ip = aci->jmp_user_address;
 	regs->sp = aci->jmp_user_stack;
+}
+
+/*
+ * Return 1 if intercept, return 0 if not.
+ */
+static int cb_intercept_do_page_fault(struct vm_area_struct *vma,
+				      unsigned long address, unsigned int flags)
+{
+	pr_info("%s(): %d-%s adddr: %#lx\n",
+		__func__, current->pid, current->comm, address);
+	return 0;
 }
 
 static int handle_asyncx_set(struct async_crossing_info __user * uinfo)
@@ -186,8 +200,9 @@ static int cb_syscall(int cmd, struct async_crossing_info __user * uinfo)
 }
 
 static struct asyncx_callbacks cb = {
-	.syscall		= cb_syscall,
-	.post_pgfault_callback	= cb_pgfault,
+	.syscall			= cb_syscall,
+	.intercept_do_page_fault	= cb_intercept_do_page_fault,
+	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
 };
 
 struct task_struct *worker_thread;
