@@ -62,6 +62,7 @@ static void __libpoll_entry(struct async_crossing_info *info)
 	struct shared_page_meta *user_page;
 	struct pt_regs *regs;
 	int index;
+	volatile unsigned long *tmp;
 
 	index = 0;
 
@@ -69,14 +70,18 @@ static void __libpoll_entry(struct async_crossing_info *info)
 	regs = &user_page->regs;
 	faulting_ip_trampoline[index] = regs->rip;
 
-	while (!(user_page->flags & ASYNCX_PGFAULT_DONE))
-		;
+	/* XXX: we need ACCESS_ONCE */
+	tmp = &user_page->flags;
+	while (1) {
+		if (*tmp & ASYNCX_PGFAULT_DONE)
+			break;
+	}
 
-#if 1
-	printf("[%d] user_page: %#lx, faulting_ip: %#lx, done: %#lx index=%d\n",
+#if 0
+	printf("[%d] user_page: %#lx, faulting_ip: %#lx, done_flag: %#lx\n",
 		__i++,
 		user_page, faulting_ip_trampoline[index],
-		user_page->flags, index);
+		user_page->flags);
 #endif
 
 	/*
@@ -195,12 +200,6 @@ int main(void)
 
 		bar = base_p + 4096 * i;
 		*bar = 100 + i;
-	}
-	for (i = 0; i < 10; i++) {
-		int *bar, cut;
-
-		bar = base_p + 4096 * i;
-		printf("[%d] %d\n", i, *bar);
 	}
 	printf("We are done!\n");
 	unset_async_crossing(&aci);

@@ -59,6 +59,7 @@ static void restore_registers(struct pt_regs *_r)
 		: "=S"(r)
 		: "a"(_r)
 	);
+
 	asm volatile (
 		"__restore:                   \n\t"
 		"	movq	%0,  %%r15    \n\t"

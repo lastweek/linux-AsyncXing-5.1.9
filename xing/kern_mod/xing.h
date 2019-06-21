@@ -22,15 +22,15 @@
  * HACK! Don't exceed one cacheline size, which is 64B.
  */
 struct asyncx_delegate_info {
-	/* Internal flags */
-	unsigned long flags;
-
 	/* Faulting task */
 	struct task_struct *tsk;
 
 	struct vm_area_struct *vma;
 	unsigned long address;
 	unsigned int pgfault_flags;
+
+	/* Internal flags */
+	unsigned long flags;
 };
 
 int init_asyncx_thread(void);

@@ -19,25 +19,7 @@ static void __used dump_aci(struct async_crossing_info *aci)
 	pr_info("  jmp_user_address:     %#lx\n", aci->jmp_user_address);
 	pr_info("  jmp_user_stack:       %#lx\n", aci->jmp_user_stack);
 	pr_info("  shared_pages:         %#lx\n", aci->shared_pages);
-	pr_info("  kva_shared_pages:     %p\n", aci->kva_shared_pages);
-}
-
-__used
-static void handle_delegate(struct asyncx_delegate_info *adi)
-{
-	struct task_struct *fault_tsk;
-	struct async_crossing_info *aci;
-	struct shared_page_meta *user_page;
-
-	fault_tsk = adi->tsk;
-	aci = fault_tsk->aci;
-	user_page = aci->kva_shared_pages;
-
-	/* Notify user its done */
-	user_page->flags |= ASYNCX_PGFAULT_DONE;
-
-	/* "Free" this slot */
-	adi->flags = 0;
+	pr_info("  kva_shared_pages:     %#lx\n", (unsigned long)aci->kva_shared_pages);
 }
 
 static void handle_intercept_delegate(struct asyncx_delegate_info *adi)
@@ -171,15 +153,17 @@ cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
 
 	/* Check if registered */
 	aci = current->aci;
-	if (unlikely(!aci))
+	if (unlikely(!aci)) {
 		return ASYNCX_PGFAULT_NOT_INTERCEPTED;
+	}
 
-	user_page = (void *)aci->shared_pages;
+	user_page = aci->kva_shared_pages;
 	user_page_regs = &user_page->regs;
 
 	/* We don't do nested handling */
-	if (unlikely(user_page->flags & ASYNCX_INTERCEPTED))
+	if (unlikely(user_page->flags & ASYNCX_INTERCEPTED)) {
 		return ASYNCX_PGFAULT_NOT_INTERCEPTED;
+	}
 
 	intercept_delegate(current, vma, address, flags);
 
