@@ -1472,8 +1472,12 @@ good_area:
 	 * FAULT_FLAG_USER|FAULT_FLAG_KILLABLE are both set in flags.
 	 */
 
+	/*
+	 * HACK: Async Crossing
+	 */
 	if (user_mode(regs)) {
-		if (asyncx_intercept_do_page_fault(vma, address, flags))
+		if (likely(asyncx_intercept_do_page_fault(regs, vma, address, flags)
+			   == ASYNCX_PGFAULT_INTERCEPTED))
 			return;
 	}
 

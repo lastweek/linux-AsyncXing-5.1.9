@@ -21,6 +21,10 @@ int default_dummy_asyncx_syscall(int cmd, struct async_crossing_info __user * ui
 }
 EXPORT_SYMBOL(default_dummy_asyncx_syscall);
 
+/*
+ * This is post pgfault where everything has been handled already.
+ * We used this during early stage of development.
+ */
 void default_dummy_asyncx_post_pgfault(struct pt_regs *regs,
 				       unsigned long address)
 {
@@ -28,10 +32,14 @@ void default_dummy_asyncx_post_pgfault(struct pt_regs *regs,
 }
 EXPORT_SYMBOL(default_dummy_asyncx_post_pgfault);
 
-int default_dummy_intercept(struct vm_area_struct *vma,
-			    unsigned long address, unsigned int flags)
+/*
+ * This is called before any actual pgfault handling.
+ */
+enum intercept_result
+default_dummy_intercept(struct pt_regs *regs, struct vm_area_struct *vma,
+			unsigned long address, unsigned int flags)
 {
-	return 0;
+	return ASYNCX_PGFAULT_NOT_INTERCEPTED;
 }
 EXPORT_SYMBOL(default_dummy_intercept);
 

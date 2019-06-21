@@ -118,15 +118,36 @@ static void cb_post_pgfault(struct pt_regs *regs, unsigned long address)
 	regs->sp = aci->jmp_user_stack;
 }
 
-/*
- * Return 1 if intercept, return 0 if not.
- */
-static int cb_intercept_do_page_fault(struct vm_area_struct *vma,
-				      unsigned long address, unsigned int flags)
+static enum intercept_result
+cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
+			   unsigned long address, unsigned int flags)
 {
-	pr_info("%s(): %d-%s adddr: %#lx\n",
-		__func__, current->pid, current->comm, address);
-	return 0;
+	struct async_crossing_info *aci;
+	struct shared_page_meta *user_page;
+	struct pt_regs *user_page_regs;
+
+	/* Check if registered */
+	aci = current->aci;
+	if (unlikely(!aci))
+		return ASYNCX_PGFAULT_NOT_INTERCEPTED;
+	user_page = (void *)aci->shared_pages;
+	user_page_regs = &user_page->regs;
+
+	/* We don't do nested handling */
+	if (unlikely(user_page->flags & ASYNCX_INTERCEPTED))
+		return ASYNCX_PGFAULT_NOT_INTERCEPTED;
+
+	delegate(current, address);
+
+	/* Save orignal fault context */
+	user_page->flags = ASYNCX_INTERCEPTED;
+	memcpy(user_page_regs, regs, sizeof(struct pt_regs));
+
+	/* Replace with user register IP and SP */
+	regs->ip = aci->jmp_user_address;
+	regs->sp = aci->jmp_user_stack;
+
+	return ASYNCX_PGFAULT_INTERCEPTED;
 }
 
 static int handle_asyncx_set(struct async_crossing_info __user * uinfo)
