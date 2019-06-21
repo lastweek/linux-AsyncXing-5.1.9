@@ -22,6 +22,7 @@ static void __used dump_aci(struct async_crossing_info *aci)
 	pr_info("  kva_shared_pages:     %p\n", aci->kva_shared_pages);
 }
 
+__used
 static void handle_delegate(struct asyncx_delegate_info *adi)
 {
 	struct task_struct *fault_tsk;
@@ -31,6 +32,30 @@ static void handle_delegate(struct asyncx_delegate_info *adi)
 	fault_tsk = adi->tsk;
 	aci = fault_tsk->aci;
 	user_page = aci->kva_shared_pages;
+
+	/* Notify user its done */
+	user_page->flags |= ASYNCX_PGFAULT_DONE;
+
+	/* "Free" this slot */
+	adi->flags = 0;
+}
+
+static void handle_intercept_delegate(struct asyncx_delegate_info *adi)
+{
+	struct task_struct *fault_tsk;
+	struct async_crossing_info *aci;
+	struct shared_page_meta *user_page;
+	vm_fault_t fault;
+
+	fault_tsk = adi->tsk;
+	aci = fault_tsk->aci;
+	user_page = aci->kva_shared_pages;
+
+	/*
+	 * Do the dirty work
+	 */
+	fault = handle_mm_fault(adi->vma, adi->address, adi->pgfault_flags);
+	up_read(&fault_tsk->mm->mmap_sem);
 
 	/* Notify user its done */
 	user_page->flags |= ASYNCX_PGFAULT_DONE;
@@ -60,7 +85,7 @@ static int worker_thread_func(void *_unused)
 
 		adi = &adi_array[0];
 		if (likely(adi->flags))
-			handle_delegate(adi);
+			handle_intercept_delegate(adi);
 
 		if (kthread_should_stop())
 			break;
@@ -79,6 +104,24 @@ static inline void delegate(struct task_struct *tsk,
 
 	adi.tsk = tsk;
 	adi.address = address;
+	adi.flags = 1;
+	memcpy(&adi_array[0], &adi, sizeof(adi));
+}
+
+/*
+ * Pass information to the remote fault handling thread
+ */
+static inline void
+intercept_delegate(struct task_struct *tsk, struct vm_area_struct *vma,
+		   unsigned long address, unsigned int pgfault_flags)
+{
+	struct asyncx_delegate_info adi;
+
+	adi.tsk = tsk;
+	adi.vma = vma;
+	adi.address = address;
+	adi.pgfault_flags = pgfault_flags;
+
 	adi.flags = 1;
 	memcpy(&adi_array[0], &adi, sizeof(adi));
 }
@@ -130,6 +173,7 @@ cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
 	aci = current->aci;
 	if (unlikely(!aci))
 		return ASYNCX_PGFAULT_NOT_INTERCEPTED;
+
 	user_page = (void *)aci->shared_pages;
 	user_page_regs = &user_page->regs;
 
@@ -137,7 +181,7 @@ cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
 	if (unlikely(user_page->flags & ASYNCX_INTERCEPTED))
 		return ASYNCX_PGFAULT_NOT_INTERCEPTED;
 
-	delegate(current, address);
+	intercept_delegate(current, vma, address, flags);
 
 	/* Save orignal fault context */
 	user_page->flags = ASYNCX_INTERCEPTED;

@@ -18,11 +18,19 @@
  * Information passed from the faulting cpu to the handling CPU.
  * async_crossing_info contains everything, and it can be derived
  * from tsk. @address is the faulting user virtual address.
+ *
+ * HACK! Don't exceed one cacheline size, which is 64B.
  */
 struct asyncx_delegate_info {
+	/* Internal flags */
 	unsigned long flags;
+
+	/* Faulting task */
 	struct task_struct *tsk;
+
+	struct vm_area_struct *vma;
 	unsigned long address;
+	unsigned int pgfault_flags;
 };
 
 int init_asyncx_thread(void);

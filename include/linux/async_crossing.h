@@ -44,7 +44,7 @@ void default_dummy_asyncx_post_pgfault(struct pt_regs *regs,
 int default_dummy_asyncx_syscall(int cmd, struct async_crossing_info __user * uinfo);
 
 enum intercept_result
-default_dummy_intercept(struct vm_area_struct *vma,
+default_dummy_intercept(struct pt_regs *regs, struct vm_area_struct *vma,
 			unsigned long address, unsigned int flags);
 
 extern struct asyncx_callbacks acb_live;
