@@ -8,7 +8,7 @@ usage() {
 
 set -e
 
-MODULE_NAME=async_crossing.ko
+MODULE_NAME=asyncx.ko
 
 if [ "$1" == "1" ]; then
 	insmod $MODULE_NAME

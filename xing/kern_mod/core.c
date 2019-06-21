@@ -19,7 +19,7 @@ static void __used dump_aci(struct async_crossing_info *aci)
 	pr_info("  jmp_user_address:     %#lx\n", aci->jmp_user_address);
 	pr_info("  jmp_user_stack:       %#lx\n", aci->jmp_user_stack);
 	pr_info("  shared_pages:         %#lx\n", aci->shared_pages);
-	pr_info("  kva_shared_pages:     %#lx\n", aci->kva_shared_pages);
+	pr_info("  kva_shared_pages:     %p\n", aci->kva_shared_pages);
 }
 
 static void handle_delegate(struct asyncx_delegate_info *adi)
@@ -39,6 +39,16 @@ static void handle_delegate(struct asyncx_delegate_info *adi)
 	adi->flags = 0;
 }
 
+/*
+ * XXX: each cpu has 1 fixed slot won't work.
+ * because the faulting thread already return to
+ * userspace, it can be re-scheduled.
+ * Another pgfault might happen and override.
+ *
+ * Thus each cpu must have multiple slots
+ *
+ * We need to have a per-cpu array.
+ */
 #define NR_ADI_ENTRIES 8
 struct asyncx_delegate_info adi_array[NR_ADI_ENTRIES];
 
@@ -59,6 +69,9 @@ static int worker_thread_func(void *_unused)
 	return 0;
 }
 
+/*
+ * Pass information to the remote fault handling thread
+ */
 static inline void delegate(struct task_struct *tsk,
 			    unsigned long address)
 {

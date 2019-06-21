@@ -2,9 +2,9 @@
 # Copyright (C) 2019 Yizhou Shan. All rights reserved.
 #
 
-obj-m := async_crossing.o
+obj-m := asyncx.o
 
-async_crossing-y := core.o thread.o
+asyncx-y := core.o
 
 # Targets
 all:
