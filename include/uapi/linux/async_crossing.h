@@ -23,6 +23,13 @@ struct async_crossing_info {
 	unsigned long shared_pages;
 	unsigned long nr_shared_pages;
 	unsigned long nr_stack_pages;
+
+	/*
+	 * The kernel virtual address of the
+	 * shared_pages.
+	 */
+	struct page *p_shared_pages;
+	void *kva_shared_pages;
 };
 
 /*

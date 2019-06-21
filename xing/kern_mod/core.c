@@ -9,15 +9,65 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/kthread.h>
 #include <linux/kprobes.h>
 #include "xing.h"
 
 static void __used dump_aci(struct async_crossing_info *aci)
 {
 	pr_info("Dump ACI:");
-	pr_info("  jmp_user_address: %#lx\n", aci->jmp_user_address);
-	pr_info("  jmp_user_stack:   %#lx\n", aci->jmp_user_stack);
-	pr_info("  shared_pages:     %#lx\n", aci->shared_pages);
+	pr_info("  jmp_user_address:     %#lx\n", aci->jmp_user_address);
+	pr_info("  jmp_user_stack:       %#lx\n", aci->jmp_user_stack);
+	pr_info("  shared_pages:         %#lx\n", aci->shared_pages);
+	pr_info("  kva_shared_pages:     %#lx\n", aci->kva_shared_pages);
+}
+
+static void handle_delegate(struct asyncx_delegate_info *adi)
+{
+	struct task_struct *fault_tsk;
+	struct async_crossing_info *aci;
+	struct shared_page_meta *user_page;
+
+	fault_tsk = adi->tsk;
+	aci = fault_tsk->aci;
+	user_page = aci->kva_shared_pages;
+
+	/* Notify user its done */
+	user_page->flags |= ASYNCX_PGFAULT_DONE;
+
+	/* "Free" this slot */
+	adi->flags = 0;
+}
+
+#define NR_ADI_ENTRIES 8
+struct asyncx_delegate_info adi_array[NR_ADI_ENTRIES];
+
+static int worker_thread_func(void *_unused)
+{
+	pr_info("Delegation thread runs on CPU %d\n", smp_processor_id());
+	while (1) {
+		struct asyncx_delegate_info *adi;
+
+		adi = &adi_array[0];
+		if (likely(adi->flags))
+			handle_delegate(adi);
+
+		if (kthread_should_stop())
+			break;
+	}
+	pr_info("Delegation thread exit CPU %d\n", smp_processor_id());
+	return 0;
+}
+
+static inline void delegate(struct task_struct *tsk,
+			    unsigned long address)
+{
+	struct asyncx_delegate_info adi;
+
+	adi.tsk = tsk;
+	adi.address = address;
+	adi.flags = 1;
+	memcpy(&adi_array[0], &adi, sizeof(adi));
 }
 
 /*
@@ -38,10 +88,10 @@ static void cb_pgfault(struct pt_regs *regs, unsigned long address)
 	user_page_regs = &user_page->regs;
 
 	/* We don't do nested handling */
-	if (unlikely(user_page->flags & ASYNCX_INTERCEPTED)) {
-		pr_crit("Nested pgfault: %#lx\n", address);
+	if (unlikely(user_page->flags & ASYNCX_INTERCEPTED))
 		return;
-	}
+
+	delegate(current, address);
 
 	/* Save orignal fault context */
 	user_page->flags = ASYNCX_INTERCEPTED;
@@ -55,6 +105,8 @@ static void cb_pgfault(struct pt_regs *regs, unsigned long address)
 static int handle_asyncx_set(struct async_crossing_info __user * uinfo)
 {
 	struct async_crossing_info *kinfo;
+	struct page *page;
+	int ret;
 
 	kinfo = kmalloc(sizeof(*kinfo), GFP_KERNEL);
 	if (!kinfo)
@@ -65,7 +117,12 @@ static int handle_asyncx_set(struct async_crossing_info __user * uinfo)
 		return -EFAULT;
 	}
 
+	ret = get_user_pages(kinfo->shared_pages, 1, 0, &page, NULL);
+	kinfo->p_shared_pages = page;
+	kinfo->kva_shared_pages = page_to_virt(page);
+
 	current->aci = kinfo;
+	dump_aci(kinfo);
 	return 0;
 }
 
@@ -120,6 +177,22 @@ static struct asyncx_callbacks cb = {
 	.post_pgfault_callback	= cb_pgfault,
 };
 
+struct task_struct *worker_thread;
+
+int init_asyncx_thread(void)
+{
+	worker_thread = kthread_run(worker_thread_func, NULL, "async_worker");
+	if (IS_ERR(worker_thread))
+		return PTR_ERR(worker_thread);
+	return 0;
+}
+
+void exit_asyncx_thread(void)
+{
+	if (!IS_ERR_OR_NULL(worker_thread))
+		kthread_stop(worker_thread);
+}
+
 static int core_init(void)
 {
 	int ret;
@@ -129,12 +202,21 @@ static int core_init(void)
 		pr_err("Fail to register asyncx callbacks.");
 		return ret;
 	}
+
+	ret = init_asyncx_thread();
+	if (ret) {
+		pr_err("Fail to init delegate thread.");
+		unregister_asyncx_callbacks(&cb);
+		return ret;
+	}
+
 	return 0;
 }
 
 static void core_exit(void)
 {
 	unregister_asyncx_callbacks(&cb);
+	exit_asyncx_thread();
 }
 
 module_init(core_init);

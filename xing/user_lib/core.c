@@ -69,10 +69,14 @@ static void __libpoll_entry(struct async_crossing_info *info)
 	regs = &user_page->regs;
 	faulting_ip_trampoline[index] = regs->rip;
 
+	while (!(user_page->flags & ASYNCX_PGFAULT_DONE))
+		;
+
 #if 1
-	printf("[%d] user_page: %#lx, faulting_ip: %#lx, index=%d\n",
+	printf("[%d] user_page: %#lx, faulting_ip: %#lx, done: %#lx index=%d\n",
 		__i++,
-		user_page, faulting_ip_trampoline[index], index);
+		user_page, faulting_ip_trampoline[index],
+		user_page->flags, index);
 #endif
 
 	/*
