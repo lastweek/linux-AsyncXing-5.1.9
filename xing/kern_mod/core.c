@@ -61,7 +61,8 @@ struct asyncx_delegate_info adi_array[NR_ADI_ENTRIES];
 
 static int worker_thread_func(void *_unused)
 {
-	pr_info("Delegation thread runs on CPU %d\n", smp_processor_id());
+	pr_info("Delegation thread runs on CPU %d Node %d\n",
+		smp_processor_id(), numa_node_id());
 	while (1) {
 		struct asyncx_delegate_info *adi;
 
@@ -74,20 +75,6 @@ static int worker_thread_func(void *_unused)
 	}
 	pr_info("Delegation thread exit CPU %d\n", smp_processor_id());
 	return 0;
-}
-
-/*
- * Pass information to the remote fault handling thread
- */
-static inline void delegate(struct task_struct *tsk,
-			    unsigned long address)
-{
-	struct asyncx_delegate_info adi;
-
-	adi.tsk = tsk;
-	adi.address = address;
-	adi.flags = 1;
-	memcpy(&adi_array[0], &adi, sizeof(adi));
 }
 
 /*
@@ -106,41 +93,6 @@ intercept_delegate(struct task_struct *tsk, struct vm_area_struct *vma,
 
 	adi.flags = 1;
 	memcpy(&adi_array[0], &adi, sizeof(adi));
-}
-
-/*
- * @regs: user registers upon fault
- * @address: the faulting virtual address
- *
- * This function was mainly used for testing during early stage.
- */
-__used
-static void cb_post_pgfault(struct pt_regs *regs, unsigned long address)
-{
-	struct async_crossing_info *aci;
-	struct shared_page_meta *user_page;
-	struct pt_regs *user_page_regs;
-
-	/* Check if registered */
-	aci = current->aci;
-	if (unlikely(!aci))
-		return;
-	user_page = (void *)aci->shared_pages;
-	user_page_regs = &user_page->regs;
-
-	/* We don't do nested handling */
-	if (unlikely(user_page->flags & ASYNCX_INTERCEPTED))
-		return;
-
-	delegate(current, address);
-
-	/* Save orignal fault context */
-	user_page->flags = ASYNCX_INTERCEPTED;
-	memcpy(user_page_regs, regs, sizeof(struct pt_regs));
-
-	/* Replace with user register IP and SP */
-	regs->ip = aci->jmp_user_address;
-	regs->sp = aci->jmp_user_stack;
 }
 
 static enum intercept_result

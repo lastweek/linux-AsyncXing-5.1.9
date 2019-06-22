@@ -116,16 +116,58 @@ static void libpoll_entry(void)
 	__libpoll_entry(&aci);
 }
 
+#define NR_PAGES 1000000ULL
+
+int test_pgfault_latency(void)
+{
+	void *foo;
+	long nr_size, i;
+	struct timeval ts, te, result;
+
+	nr_size = NR_PAGES * PAGE_SIZE;
+	foo = mmap(NULL, nr_size, PROT_READ|PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+	if (!foo)
+		die("fail to malloc");
+	printf("Range: [%#lx - %#lx]\n", foo, foo + NR_PAGES * PAGE_SIZE);
+
+	gettimeofday(&ts, NULL);
+	for (i = 0; i < NR_PAGES; i++) {
+		int *bar, cut;
+
+		bar = foo + PAGE_SIZE * i;
+		*bar = 100;
+		//printf("%10d %#lx\n", i, bar);
+	}
+#if 0
+	for (i = 0; i < NR_PAGES; i++) {
+		int *bar, cut;
+
+		bar = foo + PAGE_SIZE * i;
+		cut = *bar;
+		//printf("%10d %#lx\n", i, bar);
+	}
+#endif
+	gettimeofday(&te, NULL);
+	timeval_sub(&result, &te, &ts);
+
+	printf(" Runtime: %ld.%06ld s\n",
+		result.tv_sec, result.tv_usec);
+	printf(" NR_PAGES: %d\n", NR_PAGES);
+	printf(" per_page_ns: %lu\n",
+		(result.tv_sec * 1000000000 + result.tv_usec * 1000) / NR_PAGES);
+	return 0;
+}
+
 int main(void)
 {
 	int i, cpu, node, ret;
-	void *base_p;
 	unsigned long jmp_user_address;
 	void *shared_pages, *jmp_user_stack;
 	int nr_shared_pages, nr_stack_pages;
 
 	setbuf(stdout, NULL);
 
+	pin_cpu(23);
 	getcpu(&cpu, &node);
 	printf("Running on cpu: %d, node: %d\n", cpu, node);
 
@@ -189,19 +231,8 @@ int main(void)
 	/*
 	 * Now test
 	 */
+	test_pgfault_latency();
 
-	base_p = mmap(NULL, 4096 * 10, PROT_READ | PROT_WRITE,
-		      MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
-	if (base_p == MAP_FAILED)
-		die("Fail to mmap()");
-
-	for (i = 0; i < 10; i++) {
-		int *bar, cut;
-
-		bar = base_p + 4096 * i;
-		*bar = 100 + i;
-	}
-	printf("We are done!\n");
 	unset_async_crossing(&aci);
 	exit(0);
 	return 0;
