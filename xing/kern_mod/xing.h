@@ -14,24 +14,27 @@
 //#include <linux/async_crossing.h>
 #include "../../include/linux/async_crossing.h"
 
+struct delegate_padding {
+	char x[0];
+} __attribute__((__aligned__(64)));
+#define DELEGATE_PADDING(name)	struct delegate_padding name;
+
 /*
  * Information passed from the faulting cpu to the handling CPU.
  * async_crossing_info contains everything, and it can be derived
  * from tsk. @address is the faulting user virtual address.
- *
- * HACK! Don't exceed one cacheline size, which is 64B.
  */
 struct asyncx_delegate_info {
-	/* Faulting task */
-	struct task_struct *tsk;
+	/* Internal flags */
+	unsigned long flags;
 
+	DELEGATE_PADDING(_pad1_)
+
+	struct task_struct *tsk;
 	struct vm_area_struct *vma;
 	unsigned long address;
 	unsigned int pgfault_flags;
-
-	/* Internal flags */
-	unsigned long flags;
-};
+} __attribute__((__aligned__(64)));
 
 int init_asyncx_thread(void);
 void exit_asyncx_thread(void);

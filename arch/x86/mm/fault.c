@@ -1401,6 +1401,15 @@ void do_user_addr_fault(struct pt_regs *regs,
 #endif
 
 	/*
+	 * HACK: Async Crossing
+	 */
+	if (user_mode(regs)) {
+		if (likely(asyncx_intercept_do_page_fault(regs, NULL, address, flags)
+			   == ASYNCX_PGFAULT_INTERCEPTED))
+			return;
+	}
+
+	/*
 	 * Kernel-mode access to the user address space should only occur
 	 * on well-defined single instructions listed in the exception
 	 * tables.  But, an erroneous kernel fault occurring outside one of
@@ -1472,15 +1481,6 @@ good_area:
 	 * FAULT_FLAG_USER|FAULT_FLAG_KILLABLE are both set in flags.
 	 */
 
-	/*
-	 * HACK: Async Crossing
-	 */
-	if (user_mode(regs)) {
-		if (likely(asyncx_intercept_do_page_fault(regs, vma, address, flags)
-			   == ASYNCX_PGFAULT_INTERCEPTED))
-			return;
-	}
-
 	fault = handle_mm_fault(vma, address, flags);
 	major |= fault & VM_FAULT_MAJOR;
 
@@ -1546,8 +1546,9 @@ __do_page_fault(struct pt_regs *regs, unsigned long hw_error_code,
 	/* Was the fault on kernel-controlled part of the address space? */
 	if (unlikely(fault_in_kernel_space(address)))
 		do_kern_addr_fault(regs, hw_error_code, address);
-	else
+	else {
 		do_user_addr_fault(regs, hw_error_code, address);
+	}
 }
 NOKPROBE_SYMBOL(__do_page_fault);
 

@@ -50,7 +50,7 @@ static inline void save_registers(struct pt_regs *r)
 	);
 }
 
-static void restore_registers(struct pt_regs *_r)
+static inline void restore_registers(struct pt_regs *_r)
 {
 	struct pt_regs *r;
 	asm volatile (
@@ -96,6 +96,24 @@ static void restore_registers(struct pt_regs *_r)
 		  "m" (r->rsp),
 		  "m" (r->rbp)
 		: "memory"
+	);
+}
+
+static inline void push_registers(void)
+{
+	asm volatile (
+		"__push:\n\t"
+		"pushq %rdx\n\t"
+		"pushq %rax\n\t"
+	);
+}
+
+static inline void pop_registers(void)
+{
+	asm volatile (
+		"__pop:\n\t"
+		"popq %rax\n\t"
+		"popq %rdx\n\t"
 	);
 }
 

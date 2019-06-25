@@ -22,27 +22,61 @@ static void __used dump_aci(struct async_crossing_info *aci)
 	pr_info("  kva_shared_pages:     %#lx\n", (unsigned long)aci->kva_shared_pages);
 }
 
+/*
+ * Bottom half of the pgfault handling on remote CPU.
+ * Be careful on what's needed, always check where we
+ * intercepted do_page_fault()!
+ */
 static void handle_intercept_delegate(struct asyncx_delegate_info *adi)
 {
-	struct task_struct *fault_tsk;
+	struct task_struct *tsk;
+	struct mm_struct *mm;
+	struct vm_area_struct *vma;
 	struct async_crossing_info *aci;
 	struct shared_page_meta *user_page;
 	vm_fault_t fault;
+	unsigned long address = adi->address;
 
-	fault_tsk = adi->tsk;
-	aci = fault_tsk->aci;
+	tsk = adi->tsk;
+	mm = tsk->mm;
+	aci = tsk->aci;
 	user_page = aci->kva_shared_pages;
 
 	/*
 	 * Do the dirty work
 	 */
-	fault = handle_mm_fault(adi->vma, adi->address, adi->pgfault_flags);
-	up_read(&fault_tsk->mm->mmap_sem);
 
-	/* Notify user its done */
-	user_page->flags |= ASYNCX_PGFAULT_DONE;
+	down_read(&mm->mmap_sem);
 
-	/* "Free" this slot */
+	vma = find_vma(mm, address);
+	if (unlikely(!vma)) {
+		pr_err("Bad addr\n");
+		goto err;
+	}
+	if (likely(vma->vm_start <= address))
+		goto good_area;
+	if (unlikely(!(vma->vm_flags & VM_GROWSDOWN))) {
+		pr_err("Bad vma growsup\n");
+		goto err;
+	}
+	if (unlikely(expand_stack(vma, address))) {
+		pr_err("Bad expand stack\n");
+		goto err;
+	}
+
+good_area:
+	fault = handle_mm_fault(vma, address, adi->pgfault_flags);
+	up_read(&mm->mmap_sem);
+
+	set_pgfault_done(user_page);
+
+	/* XXX: "Free" this slot */
+	adi->flags = 0;
+
+	return;
+err:
+	up_read(&mm->mmap_sem);
+	user_page->pgfault_done = 2;
 	adi->flags = 0;
 }
 
@@ -61,18 +95,20 @@ struct asyncx_delegate_info adi_array[NR_ADI_ENTRIES];
 
 static int worker_thread_func(void *_unused)
 {
+	struct asyncx_delegate_info *adi;
+	adi = &adi_array[0];
+
 	pr_info("Delegation thread runs on CPU %d Node %d\n",
 		smp_processor_id(), numa_node_id());
-	while (1) {
-		struct asyncx_delegate_info *adi;
 
-		adi = &adi_array[0];
+	while (1) {
 		if (likely(adi->flags))
 			handle_intercept_delegate(adi);
 
 		if (kthread_should_stop())
 			break;
 	}
+
 	pr_info("Delegation thread exit CPU %d\n", smp_processor_id());
 	return 0;
 }
@@ -84,24 +120,26 @@ static inline void
 intercept_delegate(struct task_struct *tsk, struct vm_area_struct *vma,
 		   unsigned long address, unsigned int pgfault_flags)
 {
-	struct asyncx_delegate_info adi;
+	struct asyncx_delegate_info *adi = &adi_array[0];
 
-	adi.tsk = tsk;
-	adi.vma = vma;
-	adi.address = address;
-	adi.pgfault_flags = pgfault_flags;
+	adi->tsk = tsk;
+	adi->vma = vma;
+	adi->address = address;
+	adi->pgfault_flags = pgfault_flags;
 
-	adi.flags = 1;
-	memcpy(&adi_array[0], &adi, sizeof(adi));
+	adi->flags = 1;
 }
 
+/*
+ * Callback during page fault.
+ * We are in the faulting thread context.
+ */
 static enum intercept_result
 cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
 			   unsigned long address, unsigned int flags)
 {
 	struct async_crossing_info *aci;
 	struct shared_page_meta *user_page;
-	struct pt_regs *user_page_regs;
 
 	/* Check if registered */
 	aci = current->aci;
@@ -110,22 +148,24 @@ cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
 	}
 
 	user_page = aci->kva_shared_pages;
-	user_page_regs = &user_page->regs;
 
-	/* We don't do nested handling */
-	if (unlikely(user_page->flags & ASYNCX_INTERCEPTED)) {
+	/*
+	 * This came from the user libpoll code.
+	 * But we cannot handle nested interception.
+	 */
+	if (unlikely(check_intercepted(user_page))) {
+		pr_crit("%s(): nested pgfault\n", __func__);
 		return ASYNCX_PGFAULT_NOT_INTERCEPTED;
 	}
 
+	/* Delegate pgfault to remote CPU */
 	intercept_delegate(current, vma, address, flags);
 
-	/* Save orignal fault context */
-	user_page->flags = ASYNCX_INTERCEPTED;
-	memcpy(user_page_regs, regs, sizeof(struct pt_regs));
+	set_intercepted(user_page);
 
-	/* Replace with user register IP and SP */
+	regs->sp -= 8;
+	*(unsigned long *)(regs->sp) = regs->ip;
 	regs->ip = aci->jmp_user_address;
-	regs->sp = aci->jmp_user_stack;
 
 	return ASYNCX_PGFAULT_INTERCEPTED;
 }
@@ -150,7 +190,6 @@ static int handle_asyncx_set(struct async_crossing_info __user * uinfo)
 	kinfo->kva_shared_pages = page_to_virt(page);
 
 	current->aci = kinfo;
-	dump_aci(kinfo);
 	return 0;
 }
 
@@ -210,9 +249,20 @@ struct task_struct *worker_thread;
 
 int init_asyncx_thread(void)
 {
-	worker_thread = kthread_run(worker_thread_func, NULL, "async_worker");
+	int cpu;
+
+	/*
+	 * NOTE! CPU matters a lot for delegation cost.
+	 * Make sure the faulting CPU and the handling CPU
+	 * are on the same socket, seperate physical cores will be plus!
+	 */
+	cpu = 3; 
+	worker_thread = kthread_create(worker_thread_func, NULL, "async_wrk");
 	if (IS_ERR(worker_thread))
 		return PTR_ERR(worker_thread);
+
+	kthread_bind(worker_thread, cpu);
+	wake_up_process(worker_thread);
 	return 0;
 }
 

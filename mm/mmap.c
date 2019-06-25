@@ -2494,6 +2494,7 @@ int expand_downwards(struct vm_area_struct *vma,
 	validate_mm(mm);
 	return error;
 }
+EXPORT_SYMBOL(expand_downwards);
 
 /* enforced gap between the expanding stack and other mappings. */
 unsigned long stack_guard_gap = 256UL<<PAGE_SHIFT;
@@ -2538,6 +2539,7 @@ int expand_stack(struct vm_area_struct *vma, unsigned long address)
 {
 	return expand_downwards(vma, address);
 }
+EXPORT_SYMBOL(expand_stack);
 
 struct vm_area_struct *
 find_extend_vma(struct mm_struct *mm, unsigned long addr)

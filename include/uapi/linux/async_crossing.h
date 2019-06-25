@@ -38,12 +38,54 @@ struct async_crossing_info {
 #define ASYNCX_PGFAULT_DONE	0x00000001
 #define ASYNCX_INTERCEPTED	0x00000010
 
+struct xing_padding {
+	char x[0];
+} __attribute__((__aligned__(64)));
+#define XING_PADDING(name)	struct xing_padding name;
+
+
 /*
  * The kernel and user shared page.
  */
 struct shared_page_meta {
-	unsigned long flags;
-	struct pt_regs regs;
+	/*
+	 * This variable is shared between the handling CPU
+	 * and the faulting CPU. So, make it cacheline aligned.
+	 */
+	unsigned long pgfault_done;
+	XING_PADDING(_pad_1)
+
+	/*
+	 * This variable is only used by the faulting CPU
+	 * to avoid nested pgfault interception.
+	 */
+	bool intercepted;
+	XING_PADDING(_pad_2)
 };
+
+static inline void set_pgfault_done(struct shared_page_meta *p)
+{
+	p->pgfault_done = 1;
+}
+
+static inline void clear_pgfault_done(struct shared_page_meta *p)
+{
+	p->pgfault_done = 0;
+}
+
+static inline void set_intercepted(struct shared_page_meta *p)
+{
+	p->intercepted = true;
+}
+
+static inline void clear_intercepted(struct shared_page_meta *p)
+{
+	p->intercepted = false;
+}
+
+static inline bool check_intercepted(struct shared_page_meta *p)
+{
+	return p->intercepted;
+}
 
 #endif /* _LINUX_UAPI_ASYNC_CROSSING_H_ */

@@ -26,6 +26,7 @@
 #include <assert.h>
 #include <sched.h>
 #include <asm/ptrace.h>
+#include <stdbool.h>
 
 #include "async.h"
 #include "includeme.h"
@@ -52,73 +53,50 @@ static void unset_async_crossing(struct async_crossing_info *aci)
 }
 
 struct async_crossing_info aci;
-int __i=0;
-
-#define NR_FAULTING_IP_TRAMPOLINE	128
-unsigned long faulting_ip_trampoline[NR_FAULTING_IP_TRAMPOLINE];
 
 static void __libpoll_entry(struct async_crossing_info *info)
 {
 	struct shared_page_meta *user_page;
-	struct pt_regs *regs;
-	int index;
-	volatile unsigned long *tmp;
-
-	index = 0;
+	volatile unsigned long *done;
 
 	user_page = (void *)info->shared_pages;
-	regs = &user_page->regs;
-	faulting_ip_trampoline[index] = regs->rip;
-
-	/* XXX: we need ACCESS_ONCE */
-	tmp = &user_page->flags;
+	done = &user_page->pgfault_done;
 	while (1) {
-		if (*tmp & ASYNCX_PGFAULT_DONE)
+		if (*done)
 			break;
 	}
 
-#if 0
-	printf("[%d] user_page: %#lx, faulting_ip: %#lx, done_flag: %#lx\n",
-		__i++,
-		user_page, faulting_ip_trampoline[index],
-		user_page->flags);
-#endif
-
-	/*
-	 * XXX:
-	 * After restoring registers, there are only
-	 * two possible ways to do the actual jump:
-	 * 	- jmp 0x123(rip)
-	 * 	- ret
-	 *
-	 * The first requires the destination is
-	 * a compile-time known location.
-	 *
-	 * The second means we need to save the
-	 * return address into original stack.
-	 *
-	 * For multiple threads, the first won't work.
-	 */
-	user_page->flags = 0;
-	restore_registers(regs);
-	asm volatile (
-		"__ret:"
-		"	jmp *%0\n\t"
-		:
-		: "m"(faulting_ip_trampoline[index])
-		: "memory"
-	);
-	BUG();
+	clear_pgfault_done(user_page);
+	clear_intercepted(user_page);
 }
 
+/*
+ * Upon entry:
+ * 1) Stack Layout:
+ *      | ..       |
+ *      | ..       | <- Original RSP upon pgfault
+ *      | fault_ip | <- Current RSP upon entry
+ *      |          |
+ *
+ * 2) After pop_registers(), the stack layout
+ *    will be just like above, so a simple ret
+ *    will return back to the orignal fault_ip.
+ * 3) The catch, is to minimize register usage.
+ *    And whatever we are going to use, save them
+ *    in push_registers();
+ */
 static void libpoll_entry(void)
 {
+	push_registers();
+
 	__libpoll_entry(&aci);
+
+	pop_registers();
 }
 
 #define NR_PAGES 1000000ULL
 
-int test_pgfault_latency(void)
+static void test_pgfault_latency(void)
 {
 	void *foo;
 	long nr_size, i;
@@ -128,7 +106,7 @@ int test_pgfault_latency(void)
 	foo = mmap(NULL, nr_size, PROT_READ|PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
 	if (!foo)
 		die("fail to malloc");
-	printf("Range: [%#lx - %#lx]\n", foo, foo + NR_PAGES * PAGE_SIZE);
+	printf(" pgfault mmap range: [%#lx - %#lx]\n", foo, foo + NR_PAGES * PAGE_SIZE);
 
 	gettimeofday(&ts, NULL);
 	for (i = 0; i < NR_PAGES; i++) {
@@ -138,24 +116,22 @@ int test_pgfault_latency(void)
 		*bar = 100;
 		//printf("%10d %#lx\n", i, bar);
 	}
-#if 0
+	gettimeofday(&te, NULL);
+	timeval_sub(&result, &te, &ts);
+
 	for (i = 0; i < NR_PAGES; i++) {
 		int *bar, cut;
 
 		bar = foo + PAGE_SIZE * i;
-		cut = *bar;
-		//printf("%10d %#lx\n", i, bar);
+		if (*bar != 100)
+			die("Corrpted memory\n");
 	}
-#endif
-	gettimeofday(&te, NULL);
-	timeval_sub(&result, &te, &ts);
 
 	printf(" Runtime: %ld.%06ld s\n",
 		result.tv_sec, result.tv_usec);
 	printf(" NR_PAGES: %d\n", NR_PAGES);
 	printf(" per_page_ns: %lu\n",
 		(result.tv_sec * 1000000000 + result.tv_usec * 1000) / NR_PAGES);
-	return 0;
 }
 
 int main(void)
@@ -228,12 +204,11 @@ int main(void)
 		return -EINVAL;
 	}
 
-	/*
-	 * Now test
-	 */
 	test_pgfault_latency();
 
 	unset_async_crossing(&aci);
-	exit(0);
+
+	test_pgfault_latency();
+
 	return 0;
 }
