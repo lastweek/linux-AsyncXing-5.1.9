@@ -39,4 +39,6 @@ struct asyncx_delegate_info {
 int init_asyncx_thread(void);
 void exit_asyncx_thread(void);
 
+int cb_syscall(int cmd, struct async_crossing_info __user * uinfo);
+
 #endif /* _ASYNC_XING_MODULE_H_ */

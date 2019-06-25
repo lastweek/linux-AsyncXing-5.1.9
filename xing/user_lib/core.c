@@ -182,12 +182,13 @@ test_pgfault_latency_with_measure(void)
 		bar = foo + PAGE_SIZE * i;
 
 		*bar = 100;
+
 		u_tsc = rdtsc();
 		asm volatile("mfence": : :"memory");
 		k_tsc = *k_tsc_p;
 
 		total_diff += u_tsc - k_tsc;
-		//printf("%ld %ld\n", u_tsc, k_tsc);
+		//printf("%ld\n", u_tsc - k_tsc);
 	}
 	gettimeofday(&te, NULL);
 	timeval_sub(&result, &te, &ts);

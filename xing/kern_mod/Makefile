@@ -4,7 +4,7 @@
 
 obj-m := asyncx.o
 
-asyncx-y := core.o
+asyncx-y := core.o syscall.o
 
 # Targets
 all:

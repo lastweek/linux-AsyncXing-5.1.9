@@ -131,7 +131,7 @@ intercept_delegate(struct task_struct *tsk, struct vm_area_struct *vma,
 }
 
 /*
- * Callback during page fault.
+ * Callback before any actual page fault handling.
  * We are in the faulting thread context.
  */
 static enum intercept_result
@@ -175,83 +175,25 @@ cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
  * Note that this is not a pure corssing latency, rather,
  * it includes some overhead to pop registers in entry_64.S
  */
+__used
 static void cb_measure_crossing_latency(struct pt_regs *regs)
 {
-	*(unsigned long *)(regs->sp) = rdtsc_ordered();
+	if (likely(current->aci))
+		*(unsigned long *)(regs->sp) = rdtsc_ordered();
 }
 
-static int handle_asyncx_set(struct async_crossing_info __user * uinfo)
+__used
+static void cb_post_page_fault(struct pt_regs *regs, unsigned long address)
 {
-	struct async_crossing_info *kinfo;
-	struct page *page;
-	int ret;
-
-	kinfo = kmalloc(sizeof(*kinfo), GFP_KERNEL);
-	if (!kinfo)
-		return -ENOMEM;
-
-	if (copy_from_user(kinfo, uinfo, sizeof(struct async_crossing_info))) {
-		kfree(kinfo);
-		return -EFAULT;
-	}
-
-	ret = get_user_pages(kinfo->shared_pages, 1, 0, &page, NULL);
-	kinfo->p_shared_pages = page;
-	kinfo->kva_shared_pages = page_to_virt(page);
-
-	current->aci = kinfo;
-	return 0;
-}
-
-static int handle_asyncx_unset(struct async_crossing_info __user * uinfo)
-{
-	struct async_crossing_info kinfo = { };
-
-	if (copy_from_user(&kinfo, uinfo, sizeof(struct async_crossing_info)))
-		return -EFAULT;
-
-	if (current->aci) {
-		kfree(current->aci);
-		current->aci = NULL;
-	}
-	return 0;
-}
-
-static int handle_asyncx_get(struct async_crossing_info __user * uinfo)
-{
-	struct async_crossing_info *aci;
-
-	aci = current->aci;
-	if (!aci)
-		return -ENODEV;
-	if (copy_to_user(uinfo, aci, sizeof(*aci)))
-		return -EFAULT;
-	return 0;
-}
-
-static int cb_syscall(int cmd, struct async_crossing_info __user * uinfo)
-{
-	int ret = 0;
-
-	switch (cmd) {
-	case ASYNCX_SET:
-		ret = handle_asyncx_set(uinfo);
-		break;
-	case ASYNCX_UNSET:
-		ret = handle_asyncx_unset(uinfo);
-		break;
-	case ASYNCX_GET:
-		ret = handle_asyncx_get(uinfo);
-		break;
-	default:
-		ret = -EINVAL;
-	}
-	return ret;
+	if (likely(current->aci))
+		*(unsigned long *)(regs->sp) = rdtsc_ordered();
 }
 
 static struct asyncx_callbacks cb = {
 	.syscall			= cb_syscall,
 	.intercept_do_page_fault	= cb_intercept_do_page_fault,
+
+	/* DO NOT ENABLE MEASUREMENT */
 	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
 	.measure_crossing_latency	= default_dummy_measure_crossing_latency,
 };
@@ -262,11 +204,17 @@ static struct asyncx_callbacks cb = {
  * provide the syscall interface. We use the tsk->aci
  * to do some other nasty hacking.
  */
-static struct asyncx_callbacks dummy_cb = {
+static struct asyncx_callbacks measure_cb = {
 	.syscall			= cb_syscall,
 	.intercept_do_page_fault	= default_dummy_intercept,
-	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
-	.measure_crossing_latency	= cb_measure_crossing_latency,
+
+	/*
+	 * Both the following callback can do measures
+	 * the post_pgfault_callback() somehow should
+	 * give us a more precise one.
+	 */
+	.post_pgfault_callback		= cb_post_page_fault,
+	.measure_crossing_latency	= default_dummy_measure_crossing_latency,
 };
 
 struct task_struct *worker_thread;
@@ -301,7 +249,7 @@ static int core_init(void)
 	int ret;
 
 	//ret = register_asyncx_callbacks(&cb);
-	ret = register_asyncx_callbacks(&dummy_cb);
+	ret = register_asyncx_callbacks(&measure_cb);
 	if (ret) {
 		pr_err("Fail to register asyncx callbacks.");
 		return ret;
