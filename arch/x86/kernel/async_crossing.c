@@ -43,11 +43,18 @@ default_dummy_intercept(struct pt_regs *regs, struct vm_area_struct *vma,
 }
 EXPORT_SYMBOL(default_dummy_intercept);
 
+void default_dummy_measure_crossing_latency(struct pt_regs *regs)
+{
+
+}
+EXPORT_SYMBOL(default_dummy_measure_crossing_latency);
+
 /* Constant, used when user unregister */
 static const struct asyncx_callbacks acb_default = {
 	.syscall			= default_dummy_asyncx_syscall,
 	.intercept_do_page_fault	= default_dummy_intercept,
 	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
+	.measure_crossing_latency	= default_dummy_measure_crossing_latency,
 };
 
 /* Used during runtime */
@@ -55,6 +62,7 @@ struct asyncx_callbacks acb_live = {
 	.syscall			= default_dummy_asyncx_syscall,
 	.intercept_do_page_fault	= default_dummy_intercept,
 	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
+	.measure_crossing_latency	= default_dummy_measure_crossing_latency,
 };
 
 SYSCALL_DEFINE2(async_crossing, int, cmd, struct async_crossing_info __user *, uinfo)

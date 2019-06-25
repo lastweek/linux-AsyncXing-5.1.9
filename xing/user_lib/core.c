@@ -134,6 +134,68 @@ static void test_pgfault_latency(void)
 		(result.tv_sec * 1000000000 + result.tv_usec * 1000) / NR_PAGES);
 }
 
+static __attribute__((always_inline)) inline unsigned long current_stack_pointer(void)
+{
+	unsigned long sp;
+	asm volatile (
+		"movq %%rsp, %0\n"
+		: "=r" (sp)
+	);
+	return sp;
+}
+
+static __attribute__((always_inline)) inline unsigned long rdtsc(void)
+{
+	unsigned long low, high;
+	asm volatile("rdtsc" : "=a" (low), "=d" (high));
+	return ((low) | (high) << 32);
+}
+
+/*
+ * Used with measure_crossing_latency()!
+ * The kernel tsc is saved on stack.
+ */
+static __attribute__((always_inline)) inline void
+test_pgfault_latency_with_measure(void)
+{
+	void *foo;
+	long nr_size, i;
+	struct timeval ts, te, result;
+	unsigned long total_diff = 0;
+	unsigned long sp;
+	unsigned long u_tsc, k_tsc;
+	unsigned long *k_tsc_p;
+	unsigned long cushion[10];
+
+	nr_size = NR_PAGES * PAGE_SIZE;
+	foo = mmap(NULL, nr_size, PROT_READ|PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+	if (!foo)
+		die("fail to malloc");
+
+	sp = current_stack_pointer();
+	k_tsc_p = (unsigned long *)(sp);
+	printf("sp: %#lx\n", k_tsc_p);
+
+	gettimeofday(&ts, NULL);
+	for (i = 0; i < NR_PAGES; i++) {
+		int *bar, cut;
+		bar = foo + PAGE_SIZE * i;
+
+		*bar = 100;
+		u_tsc = rdtsc();
+		asm volatile("mfence": : :"memory");
+		k_tsc = *k_tsc_p;
+
+		total_diff += u_tsc - k_tsc;
+		//printf("%ld %ld\n", u_tsc, k_tsc);
+	}
+	gettimeofday(&te, NULL);
+	timeval_sub(&result, &te, &ts);
+
+	printf(" crossing total: %lu cycles, avg: %lu cycles\n",
+		total_diff, total_diff/NR_PAGES);
+}
+
 int main(void)
 {
 	int i, cpu, node, ret;
@@ -204,11 +266,11 @@ int main(void)
 		return -EINVAL;
 	}
 
-	test_pgfault_latency();
+	test_pgfault_latency_with_measure();
 
 	unset_async_crossing(&aci);
 
-	test_pgfault_latency();
+	//test_pgfault_latency();
 
 	return 0;
 }

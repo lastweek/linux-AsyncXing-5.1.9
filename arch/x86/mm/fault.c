@@ -1508,6 +1508,19 @@ good_area:
 	}
 
 	up_read(&mm->mmap_sem);
+
+	/*
+	 * HACK:
+	 * If we have delegation, this is the point where the handling CPU
+	 * will notify the faulting CPU.
+	 *
+	 * For here to userspace, this is the period we are trying to optimize.
+	 * For us, if we have a win, it means:
+	 * 	this period > (delegtion + notification)
+	 */
+	if (user_mode(regs) && current->aci)
+		asyncx_measure_crossing_latency(regs);
+
 	if (unlikely(fault & VM_FAULT_ERROR)) {
 		mm_fault_error(regs, hw_error_code, address, fault);
 		return;

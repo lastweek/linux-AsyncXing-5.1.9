@@ -33,15 +33,17 @@ struct asyncx_callbacks {
 						   unsigned int flags);
 
 	void		(*post_pgfault_callback)(struct pt_regs *, unsigned long);
+
+	void		(*measure_crossing_latency)(struct pt_regs *);
 };
 
 /* Public API for modules */
 int register_asyncx_callbacks(struct asyncx_callbacks *cb);
 int unregister_asyncx_callbacks(struct asyncx_callbacks *cb);
 
-void default_dummy_asyncx_post_pgfault(struct pt_regs *regs,
-				       unsigned long address);
+void default_dummy_asyncx_post_pgfault(struct pt_regs *regs, unsigned long address);
 int default_dummy_asyncx_syscall(int cmd, struct async_crossing_info __user * uinfo);
+void default_dummy_measure_crossing_latency(struct pt_regs *regs);
 
 enum intercept_result
 default_dummy_intercept(struct pt_regs *regs, struct vm_area_struct *vma,
@@ -69,6 +71,12 @@ asyncx_intercept_do_page_fault(struct pt_regs *regs,
 			       unsigned int flags)
 {
 	return acb_live.intercept_do_page_fault(regs, vma, address, flags);
+}
+
+static inline void
+asyncx_measure_crossing_latency(struct pt_regs *regs)
+{
+	return acb_live.measure_crossing_latency(regs);
 }
 
 #endif /* _LINUX_ASYNC_CROSSING_H_ */

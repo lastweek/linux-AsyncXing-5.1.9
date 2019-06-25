@@ -170,6 +170,16 @@ cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
 	return ASYNCX_PGFAULT_INTERCEPTED;
 }
 
+/*
+ * Used to measure the kernel to user crossing overhead
+ * Note that this is not a pure corssing latency, rather,
+ * it includes some overhead to pop registers in entry_64.S
+ */
+static void cb_measure_crossing_latency(struct pt_regs *regs)
+{
+	*(unsigned long *)(regs->sp) = rdtsc_ordered();
+}
+
 static int handle_asyncx_set(struct async_crossing_info __user * uinfo)
 {
 	struct async_crossing_info *kinfo;
@@ -243,6 +253,20 @@ static struct asyncx_callbacks cb = {
 	.syscall			= cb_syscall,
 	.intercept_do_page_fault	= cb_intercept_do_page_fault,
 	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
+	.measure_crossing_latency	= default_dummy_measure_crossing_latency,
+};
+
+/*
+ * This dummy callback sets is mainly for testing.
+ * It should NOT intercept any pgfault, rather, it only
+ * provide the syscall interface. We use the tsk->aci
+ * to do some other nasty hacking.
+ */
+static struct asyncx_callbacks dummy_cb = {
+	.syscall			= cb_syscall,
+	.intercept_do_page_fault	= default_dummy_intercept,
+	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
+	.measure_crossing_latency	= cb_measure_crossing_latency,
 };
 
 struct task_struct *worker_thread;
@@ -276,7 +300,8 @@ static int core_init(void)
 {
 	int ret;
 
-	ret = register_asyncx_callbacks(&cb);
+	//ret = register_asyncx_callbacks(&cb);
+	ret = register_asyncx_callbacks(&dummy_cb);
 	if (ret) {
 		pr_err("Fail to register asyncx callbacks.");
 		return ret;
