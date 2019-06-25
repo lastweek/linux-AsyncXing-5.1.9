@@ -1,0 +1,6 @@
+#ifndef _SHARED_CONFIG_H_
+#define _SHARED_CONFIG_H_
+
+//#define CONFIG_ASYNCX_CHECK_NESTED
+
+#endif /* _SHARED_CONFIG_H_ */

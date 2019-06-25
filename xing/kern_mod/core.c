@@ -12,6 +12,7 @@
 #include <linux/kthread.h>
 #include <linux/kprobes.h>
 #include "xing.h"
+#include "../config.h"
 
 static void __used dump_aci(struct async_crossing_info *aci)
 {
@@ -68,6 +69,7 @@ good_area:
 	fault = handle_mm_fault(vma, address, adi->pgfault_flags);
 	up_read(&mm->mmap_sem);
 
+	/* Notify user */
 	set_pgfault_done(user_page);
 
 	/* XXX: "Free" this slot */
@@ -123,7 +125,7 @@ intercept_delegate(struct task_struct *tsk, struct vm_area_struct *vma,
 	struct asyncx_delegate_info *adi = &adi_array[0];
 
 	adi->tsk = tsk;
-	adi->vma = vma;
+	//adi->vma = vma;
 	adi->address = address;
 	adi->pgfault_flags = pgfault_flags;
 
@@ -149,22 +151,27 @@ cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
 
 	user_page = aci->kva_shared_pages;
 
-	/*
-	 * This came from the user libpoll code.
-	 * But we cannot handle nested interception.
-	 */
+#ifdef CONFIG_ASYNCX_CHECK_NESTED
 	if (unlikely(check_intercepted(user_page))) {
+		/*
+		 * This came from the user libpoll code.
+		 * But we cannot handle nested interception.
+		 */
 		pr_crit("%s(): nested pgfault\n", __func__);
 		return ASYNCX_PGFAULT_NOT_INTERCEPTED;
 	}
+	set_intercepted(user_page);
+#endif
 
 	/* Delegate pgfault to remote CPU */
 	intercept_delegate(current, vma, address, flags);
 
-	set_intercepted(user_page);
-
+	/*
+	 * Save the original faulting IP into the user stack.
+	 * Hope.. we are not corrupting the stack.
+	 */
+	*(unsigned long *)(regs->sp - 8) = regs->ip;
 	regs->sp -= 8;
-	*(unsigned long *)(regs->sp) = regs->ip;
 	regs->ip = aci->jmp_user_address;
 
 	return ASYNCX_PGFAULT_INTERCEPTED;
@@ -204,6 +211,7 @@ static struct asyncx_callbacks cb = {
  * provide the syscall interface. We use the tsk->aci
  * to do some other nasty hacking.
  */
+__used
 static struct asyncx_callbacks measure_cb = {
 	.syscall			= cb_syscall,
 	.intercept_do_page_fault	= default_dummy_intercept,
@@ -248,8 +256,8 @@ static int core_init(void)
 {
 	int ret;
 
-	//ret = register_asyncx_callbacks(&cb);
-	ret = register_asyncx_callbacks(&measure_cb);
+	ret = register_asyncx_callbacks(&cb);
+	//ret = register_asyncx_callbacks(&measure_cb);
 	if (ret) {
 		pr_err("Fail to register asyncx callbacks.");
 		return ret;

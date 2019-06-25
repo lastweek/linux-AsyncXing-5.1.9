@@ -32,6 +32,8 @@
 #include "includeme.h"
 #include "../../include/uapi/linux/async_crossing.h"
 
+#include "../config.h"
+
 static int syscall_async_crossing(int cmd, struct async_crossing_info *aci)
 {
 	int ret;
@@ -67,7 +69,10 @@ static void __libpoll_entry(struct async_crossing_info *info)
 	}
 
 	clear_pgfault_done(user_page);
+
+#ifdef CONFIG_ASYNCX_CHECK_NESTED
 	clear_intercepted(user_page);
+#endif
 }
 
 /*
@@ -267,11 +272,11 @@ int main(void)
 		return -EINVAL;
 	}
 
-	test_pgfault_latency_with_measure();
+	test_pgfault_latency();
 
 	unset_async_crossing(&aci);
 
-	//test_pgfault_latency();
+	test_pgfault_latency();
 
 	return 0;
 }
