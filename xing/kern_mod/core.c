@@ -93,7 +93,7 @@ err:
  * We need to have a per-cpu array.
  */
 #define NR_ADI_ENTRIES 8
-struct asyncx_delegate_info adi_array[NR_ADI_ENTRIES];
+struct asyncx_delegate_info adi_array[NR_ADI_ENTRIES] __cacheline_aligned;
 
 static int worker_thread_func(void *_unused)
 {
@@ -102,6 +102,9 @@ static int worker_thread_func(void *_unused)
 
 	pr_info("Delegation thread runs on CPU %d Node %d\n",
 		smp_processor_id(), numa_node_id());
+
+	pr_info("%#lx %#lx\n",
+		&adi->flags, &adi->tsk);
 
 	while (1) {
 		if (likely(adi->flags))
@@ -125,7 +128,6 @@ intercept_delegate(struct task_struct *tsk, struct vm_area_struct *vma,
 	struct asyncx_delegate_info *adi = &adi_array[0];
 
 	adi->tsk = tsk;
-	//adi->vma = vma;
 	adi->address = address;
 	adi->pgfault_flags = pgfault_flags;
 
@@ -236,7 +238,7 @@ int init_asyncx_thread(void)
 	 * Make sure the faulting CPU and the handling CPU
 	 * are on the same socket, seperate physical cores will be plus!
 	 */
-	cpu = 3; 
+	cpu = 19; 
 	worker_thread = kthread_create(worker_thread_func, NULL, "async_wrk");
 	if (IS_ERR(worker_thread))
 		return PTR_ERR(worker_thread);

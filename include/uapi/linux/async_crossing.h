@@ -61,7 +61,7 @@ struct shared_page_meta {
 	 */
 	bool intercepted;
 	XING_PADDING(_pad_2)
-};
+} __attribute__((__aligned__(128)));
 
 static inline void set_pgfault_done(struct shared_page_meta *p)
 {

@@ -28,13 +28,12 @@ struct asyncx_delegate_info {
 	/* Internal flags */
 	unsigned long flags;
 
-	DELEGATE_PADDING(_pad1_)
+	//DELEGATE_PADDING(_pad1_)
 
 	struct task_struct *tsk;
-	struct vm_area_struct *vma;
 	unsigned long address;
 	unsigned int pgfault_flags;
-} __attribute__((__aligned__(64)));
+} __attribute__((__aligned__(128)));
 
 int init_asyncx_thread(void);
 void exit_asyncx_thread(void);
