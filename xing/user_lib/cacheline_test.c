@@ -39,12 +39,12 @@ static __attribute__((always_inline)) inline unsigned long rdtsc(void)
 struct request {
 	unsigned int flag;
 	unsigned long unused;
-} __attribute__((aligned(4096)));
+} __attribute__((aligned(128)));
 
 struct response {
 	unsigned int flag;
 	unsigned long unused;
-} __attribute__((aligned(4096)));
+} __attribute__((aligned(128)));
 
 volatile int server_running = 0;
 volatile int stop_server = 0;
@@ -67,7 +67,7 @@ void *server_func(void *_unused)
 	int cpu, node;
 	pin_cpu(cpu_server);
 	getcpu(&cpu, &node);
-	printf("%s(): CPU %d NODE: %d\n", __func__, cpu, node);
+	printf("Server: CPU %d NODE: %d\n", cpu, node);
 	server_running = 1;
 
 	while (!stop_server) {
@@ -76,7 +76,6 @@ void *server_func(void *_unused)
 			resp.flag = ~resp.flag;
 		}
 	}
-
 }
 
 void client_func(void)
@@ -119,7 +118,7 @@ int main(void)
 	getcpu(&cpu, &node);
 
 	printf("Req %#lx Resp %#lx;  nr_delegations: %d\n", &req, &resp, nr_delegations);
-	printf("%s(): CPU %d NODE: %d\n", __func__, cpu, node);
+	printf("Client(): CPU %d NODE: %d\n", cpu, node);
 
 	memset((void *)&req, 0, sizeof(req));
 	memset((void *)&resp, 0, sizeof(resp));
