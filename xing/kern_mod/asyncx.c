@@ -171,9 +171,6 @@ static int worker_thread_func(void *_unused)
 	pr_info("Delegation thread runs on CPU %d Node %d\n",
 		smp_processor_id(), numa_node_id());
 
-	pr_info("%#lx %#lx\n",
-		&adi->flags, &adi->tsk);
-
 	while (1) {
 		if (likely(adi->flags))
 			handle_intercept_delegate(adi);
