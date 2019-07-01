@@ -23,6 +23,74 @@ static void __used dump_aci(struct async_crossing_info *aci)
 	pr_info("  kva_shared_pages:     %#lx\n", (unsigned long)aci->kva_shared_pages);
 }
 
+static int handle_asyncx_set(struct async_crossing_info __user * uinfo)
+{
+	struct async_crossing_info *kinfo;
+	struct page *page;
+	int ret;
+
+	kinfo = kmalloc(sizeof(*kinfo), GFP_KERNEL);
+	if (!kinfo)
+		return -ENOMEM;
+
+	if (copy_from_user(kinfo, uinfo, sizeof(struct async_crossing_info))) {
+		kfree(kinfo);
+		return -EFAULT;
+	}
+
+	ret = get_user_pages(kinfo->shared_pages, 1, 0, &page, NULL);
+	kinfo->p_shared_pages = page;
+	kinfo->kva_shared_pages = page_to_virt(page);
+
+	current->aci = kinfo;
+	return 0;
+}
+
+static int handle_asyncx_unset(struct async_crossing_info __user * uinfo)
+{
+	struct async_crossing_info kinfo = { };
+
+	if (copy_from_user(&kinfo, uinfo, sizeof(struct async_crossing_info)))
+		return -EFAULT;
+
+	if (current->aci) {
+		kfree(current->aci);
+		current->aci = NULL;
+	}
+	return 0;
+}
+
+static int handle_asyncx_get(struct async_crossing_info __user * uinfo)
+{
+	struct async_crossing_info *aci;
+
+	aci = current->aci;
+	if (!aci)
+		return -ENODEV;
+	if (copy_to_user(uinfo, aci, sizeof(*aci)))
+		return -EFAULT;
+	return 0;
+}
+
+int cb_syscall(int cmd, struct async_crossing_info __user * uinfo)
+{
+	int ret = 0;
+
+	switch (cmd) {
+	case ASYNCX_SET:
+		ret = handle_asyncx_set(uinfo);
+		break;
+	case ASYNCX_UNSET:
+		ret = handle_asyncx_unset(uinfo);
+		break;
+	case ASYNCX_GET:
+		ret = handle_asyncx_get(uinfo);
+		break;
+	default:
+		ret = -EINVAL;
+	}
+	return ret;
+}
 /*
  * Bottom half of the pgfault handling on remote CPU.
  * Be careful on what's needed, always check where we

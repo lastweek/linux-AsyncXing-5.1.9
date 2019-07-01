@@ -2,9 +2,7 @@
 # Copyright (C) 2019 Yizhou Shan. All rights reserved.
 #
 
-obj-m := asyncx.o
-
-asyncx-y := core.o syscall.o
+obj-m := asyncx.o page_advance.o
 
 # Targets
 all:
