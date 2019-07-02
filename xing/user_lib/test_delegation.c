@@ -47,19 +47,20 @@ struct response {
 } __attribute__((aligned(128)));
 
 volatile int server_running = 0;
-volatile int stop_server = 0;
 
 volatile struct request req __attribute__((aligned(128)));
 volatile struct response resp __attribute__((aligned(128)));
 
-int cpu_client = 21;
-int cpu_server= 19;
+int cpu_client = 20;
+int cpu_server= 23;
 
 int nr_delegations = 10000000;
 
+int foo;
+
 static inline void handle(void)
 {
-
+	foo++;
 }
 
 void *server_func(void *_unused)
@@ -70,11 +71,15 @@ void *server_func(void *_unused)
 	printf("Server: CPU %d NODE: %d\n", cpu, node);
 	server_running = 1;
 
-	while (!stop_server) {
-		if (req.flag ^ resp.flag) {
-			handle();
-			resp.flag = ~resp.flag;
-		}
+	while (1) {
+		/* Wait for request */
+		while (!(req.flag ^ resp.flag))
+			asm volatile("rep;nop": : :"memory");;
+
+		handle();
+
+		/* Send response */
+		resp.flag = ~resp.flag;
 	}
 }
 
@@ -94,7 +99,7 @@ void client_func(void)
 		req.unused = 100;
 		req.flag = ~req.flag;
 
-		/* Poll for response */
+		/* Wait for response */
 		while (req.flag ^ resp.flag)
 			asm volatile("rep;nop": : :"memory");;
 	}
@@ -133,9 +138,8 @@ int main(void)
 
 	client_func();
 	client_func();
-	client_func();
 
-	stop_server = 1;
-	pthread_join(pth, NULL);
+	//pthread_join(pth, NULL);
+	printf("%d\n", foo);
 	return 0;
 }
