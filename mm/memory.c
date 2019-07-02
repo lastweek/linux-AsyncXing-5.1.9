@@ -70,6 +70,7 @@
 #include <linux/dax.h>
 #include <linux/oom.h>
 #include <linux/numa.h>
+#include <linux/pgadvance.h>
 
 #include <asm/io.h>
 #include <asm/mmu_context.h>
@@ -2890,6 +2891,16 @@ out_release:
 	return ret;
 }
 
+static inline struct page *
+INTERCEPT_alloc_zeroed_user_highpage_movable(struct vm_area_struct *vma,
+					unsigned long vaddr)
+{
+	if (likely(pcb_live.alloc_zero_page))
+		return pcb_live.alloc_zero_page();
+	else
+		return alloc_zeroed_user_highpage_movable(vma, vaddr);
+}
+
 /*
  * We enter with non-exclusive mmap_sem (to exclude vma changes,
  * but allow concurrent faults), and pte mapped but not yet locked.
@@ -2947,7 +2958,8 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	/* Allocate our own private page. */
 	if (unlikely(anon_vma_prepare(vma)))
 		goto oom;
-	page = alloc_zeroed_user_highpage_movable(vma, vmf->address);
+
+	page = INTERCEPT_alloc_zeroed_user_highpage_movable(vma, vmf->address);
 	if (!page)
 		goto oom;
 

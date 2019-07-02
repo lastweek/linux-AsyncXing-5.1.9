@@ -14,6 +14,7 @@
 #include <linux/syscalls.h>
 #include <linux/uaccess.h>
 #include <linux/async_crossing.h>
+#include <linux/pgadvance.h>
 
 int default_dummy_asyncx_syscall(int cmd, struct async_crossing_info __user * uinfo)
 {
@@ -83,3 +84,23 @@ int unregister_asyncx_callbacks(struct asyncx_callbacks *cb)
 	return 0;
 }
 EXPORT_SYMBOL(unregister_asyncx_callbacks);
+
+/*
+ * For page advance
+ */
+
+struct pgadvance_callbacks pcb_live;
+
+int register_pgadvance_callbacks(struct pgadvance_callbacks *pcb)
+{
+	memcpy(&pcb_live, pcb, sizeof(struct pgadvance_callbacks));
+	return 0;
+}
+EXPORT_SYMBOL(register_pgadvance_callbacks);
+
+int unregister_pgadvance_callbacks(void)
+{
+	memset(&pcb_live, 0, sizeof(struct pgadvance_callbacks));
+	return 0;
+}
+EXPORT_SYMBOL(unregister_pgadvance_callbacks);
