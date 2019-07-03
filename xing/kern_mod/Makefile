@@ -2,7 +2,7 @@
 # Copyright (C) 2019 Yizhou Shan. All rights reserved.
 #
 
-obj-m := asyncx.o page_advance.o
+obj-m := asyncx.o pgadvance.o
 
 # Targets
 all:

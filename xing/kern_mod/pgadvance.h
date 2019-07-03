@@ -13,7 +13,7 @@
 #include <linux/compiler.h>
 #include <linux/kernel.h>
 
-enum {
+enum pgadvance_list_type {
 	PGADVANCE_TYPE_ZERO,
 	PGADVANCE_TYPE_NROMAL,
 
@@ -24,11 +24,11 @@ struct pgadvance_list {
 	int count;
 	int watermark;
 	int batch;
-	struct list_head list;
+	struct list_head head;
 } ____cacheline_aligned;
 
 struct pgadvance_set {
-	struct pgadvance_list pdl[NR_PGADVANCE_TYPES];
+	struct pgadvance_list lists[NR_PGADVANCE_TYPES];
 } ____cacheline_aligned;
 
 #endif /* _PAGEADVANCE_H_ */
