@@ -18,7 +18,7 @@
 #include "../config.h"
 
 struct pgadvance_set *pas __percpu;
-DEFINE_PER_CPU(struct task_struct *, pgadvancers);
+struct task_struct **pgadvancers __percpu;
 
 static void refill_list(struct pgadvance_list *list, int cpu,
 			enum pgadvance_list_type type,
@@ -28,8 +28,8 @@ static void refill_list(struct pgadvance_list *list, int cpu,
 	struct page *page;
 	gfp_t flags = GFP_KERNEL;
 
-	//pr_info("%s(): %d-%s %#lx nr:%d cpu:%d\n",
-	//	__func__, current->pid, current->comm, (unsigned long)list, nr_to_fill, cpu);
+	pr_info("%s(): %d-%s %#lx nr:%d cpu:%d\n",
+		__func__, current->pid, current->comm, (unsigned long)list, nr_to_fill, cpu);
 
 	if (type == PGADVANCE_TYPE_ZERO)
 		flags |= __GFP_ZERO;
@@ -47,7 +47,8 @@ static void refill_list(struct pgadvance_list *list, int cpu,
 
 static struct page *cb_alloc_zero_page(void)
 {
-	struct pgadvance_set *p = this_cpu_ptr(pas);
+#if 0
+	struct pgadvance_set *p = this_cpu(pas);
 	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_ZERO];
 	struct page *page;
 
@@ -58,6 +59,8 @@ static struct page *cb_alloc_zero_page(void)
 	list_del(&page->lru);
 	l->count--;
 	return page;
+#endif
+	return alloc_page(__GFP_ZERO);
 }
 
 struct pgadvance_callbacks pcb = {
@@ -95,7 +98,7 @@ static int init_percpu_sets(void)
 	enum pgadvance_list_type type;
 	int cpu, watermark, batch;
 
-	pas = alloc_percpu(struct pgadvance_set);
+	pas = alloc_percpu_gfp(struct pgadvance_set, __GFP_ZERO);
 	if (!pas)
 		return -ENOMEM;
 
@@ -106,6 +109,7 @@ static int init_percpu_sets(void)
 		struct pgadvance_set *p = per_cpu_ptr(pas, cpu);
 		struct pgadvance_list *l;
 
+		pr_crit("%s(): %#lx\n", __func__, p);
 		for (type = 0; type < NR_PGADVANCE_TYPES; type++) {
 			l = &p->lists[type];
 
@@ -131,6 +135,7 @@ static void free_percpu_sets(void)
 		struct pgadvance_set *p = per_cpu_ptr(pas, cpu);
 		struct pgadvance_list *l;
 
+		pr_crit("%s(): %#lx\n", __func__, p);
 		for (type = 0; type < NR_PGADVANCE_TYPES; type++) {
 			l = &p->lists[type];
 			free_list(l);
@@ -156,31 +161,36 @@ static void exit_pgadvance_threads(void)
 {
 	int cpu;
 
+	if (!pgadvancers)
+		return;
+
 	for_each_possible_cpu(cpu) {
 		struct task_struct *tsk = per_cpu_ptr(pgadvancers, cpu);
-		pr_crit("Exit cpu %d tsk %#lx\n", cpu, (unsigned long)tsk);
-		if (tsk) {
+		if (!IS_ERR_OR_NULL(tsk))
 			kthread_stop(tsk);
-		}
 	}
 }
 
+/* Create per-cpu pgadvancer thread and pin them. */
 static int init_pgadvance_threads(void)
 {
 	int cpu;
+	struct task_struct *tsk;
+
+	pgadvancers = alloc_percpu_gfp(struct task_struct *, __GFP_ZERO);
+	if (!pgadvancers)
+		return -ENOMEM;
 
 	for_each_possible_cpu(cpu) {
-		struct task_struct *tsk = per_cpu_ptr(pgadvancers, cpu);
-
 		tsk = kthread_create(pgadvancers_func, NULL, "pgadvancers%d", cpu);
 		if (IS_ERR(tsk)) {
-			tsk = NULL;
 			pr_err("Fail to create pgadvancer for CPU %d\n", cpu);
 			return -EFAULT;
 		}
-
 		kthread_bind(tsk, cpu);
 		wake_up_process(tsk);
+
+		per_cpu(pgadvancers, cpu) = tsk;
 	}
 	return 0;
 }
@@ -217,8 +227,6 @@ static void pgadvance_exit(void)
 	unregister_pgadvance_callbacks();
 	exit_pgadvance_threads();
 	free_percpu_sets();
-
-	mdelay(10000);
 }
 
 module_init(pgadvance_init);
