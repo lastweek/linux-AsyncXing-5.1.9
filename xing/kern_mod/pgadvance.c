@@ -17,8 +17,9 @@
 #include "pgadvance.h"
 #include "../config.h"
 
-DEFINE_PER_CPU(struct pgadvance_set, pas);
-DEFINE_PER_CPU(struct task_struct *, pgadvancers);
+static DEFINE_PER_CPU(struct pgadvance_set, pas);
+static DEFINE_PER_CPU(struct task_struct *, pgadvancers);
+static DEFINE_PER_CPU(struct pgadvancers_work_pool, pgadvancers_work_pool);
 
 static void refill_list(struct pgadvance_list *list, int cpu,
 			enum pgadvance_list_type type,
@@ -37,7 +38,7 @@ static void refill_list(struct pgadvance_list *list, int cpu,
 	for (i = 0; i < nr_to_fill; i++) {
 		page = alloc_page(flags);
 		if (!page) {
-			WARN_ONCE(1, "Fail to alloc");
+			WARN_ON_ONCE(1);
 			break;
 		}
 		list_add(&page->lru, &list->head);
@@ -45,14 +46,59 @@ static void refill_list(struct pgadvance_list *list, int cpu,
 	list->count += i;
 }
 
+//XXX
+static inline int choose_refill_cpu(void)
+{
+	return 21;
+}
+
+static inline void send_refill_work(enum pgadvance_list_type type)
+{
+	int refill_cpu;
+	struct pgadvancers_work_pool *wpool;
+	struct pgadvancers_work_info winfo;
+	u64 *_bitmap;
+	u64 old, new, ret;
+	int index;
+
+	refill_cpu = choose_refill_cpu();
+	wpool = per_cpu_ptr(&pgadvancers_work_pool, refill_cpu);
+	_bitmap = &wpool->bitmap;
+
+	/* Reserve the slot */
+	for (;;) {
+		old = *_bitmap;
+		index = ffz(old);
+
+		new = old | (1ULL << index);
+		ret = cmpxchg(_bitmap, old, new);
+		if (ret == old)
+			break;
+
+	}
+
+	/* Then copy the work info */
+	winfo.request_cpu = smp_processor_id();
+	winfo.list_type = type;
+	memcpy(&wpool->pool[index], &winfo, sizeof(winfo));
+
+	pr_crit("%s()-cpu%d: refill_cpu=%d, index=%d, bitmap=%#lx\n",
+		__func__, smp_processor_id(), refill_cpu, index, *_bitmap);
+}
+
+/*
+ * Callback for do_anonymous_page()
+ */
 static struct page *cb_alloc_zero_page(void)
 {
 	struct pgadvance_set *p = this_cpu_ptr(&pas);
 	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_ZERO];
 	struct page *page;
 
-	if (unlikely(!l->count))
+	if (unlikely(!l->count)) {
+		send_refill_work(PGADVANCE_TYPE_ZERO);
 		refill_list(l, smp_processor_id(), PGADVANCE_TYPE_ZERO, l->batch);	
+	}
 
 	page = list_first_entry(&l->head, struct page, lru);
 	list_del(&page->lru);
@@ -60,7 +106,7 @@ static struct page *cb_alloc_zero_page(void)
 	return page;
 }
 
-struct pgadvance_callbacks pcb = {
+static struct pgadvance_callbacks pcb = {
 	.alloc_zero_page = cb_alloc_zero_page
 };
 
@@ -74,19 +120,79 @@ static int cal_batch(void)
 	return 32;
 }
 
-/*
- * The background cashier.
- */
-static int pgadvancers_func(void *_unused)
+static inline void do_handle_refill_work(struct pgadvancers_work_info *winfo)
 {
-	pr_crit("%s CPU %d run\n", current->comm, smp_processor_id());
-	while (1) {
-		schedule();
-		if (kthread_should_stop())
+	int request_cpu = winfo->request_cpu;
+	enum pgadvance_list_type type = winfo->list_type;
+	struct pgadvance_set *ps;
+	struct pgadvance_list *pl;
+
+	ps = per_cpu_ptr(&pas, request_cpu);
+	pl = &ps->lists[type];
+
+	refill_list(pl, request_cpu, type, pl->batch);
+}
+
+/*
+ * Find a pending work by scanning bitmap.
+ * We will reset the bitmap before do the actual dirty work.
+ */
+static inline void handle_refill_work(struct pgadvancers_work_pool *wpool)
+{
+	struct pgadvancers_work_info winfo;
+	u64 *_bitmap = &wpool->bitmap;
+	u64 old, new;
+	int index;
+
+	/*
+	 * XXX
+	 * Think about what's the correct way to get data
+	 */
+	for (;;) {
+		old = *_bitmap;
+		index = fls64(old);
+		if (unlikely(!index)) {
+			WARN_ON_ONCE(1);
+			return;
+		}
+		index -= 1;
+
+		/*
+		 * Grab the work info before reset the bitmap,
+		 * in case it got overrided immediately by another racing CPU.
+		 */
+		memcpy(&winfo, &wpool->pool[index], sizeof(winfo));
+		new = old & ~(1ULL << index);
+		new = cmpxchg(_bitmap, old, new);
+		if (new == old)
 			break;
 	}
-	pr_crit("%s CPU %d exit\n", current->comm, smp_processor_id());
+	//do_handle_refill_work(&winfo);
 
+	pr_crit("%s(): index=%d request_cpu=%2d\n",
+		__func__, index, winfo.request_cpu);
+}
+
+int pgadvance_wakeup_interval_s = 1;
+
+/* The background daemon */
+static int pgadvancers_func(void *_unused)
+{
+	struct pgadvancers_work_pool *wpool;
+
+	wpool = this_cpu_ptr(&pgadvancers_work_pool);
+	while (1) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule_timeout(pgadvance_wakeup_interval_s * HZ);
+
+		if (kthread_should_stop())
+			break;
+
+		while (wpool->bitmap) {
+			//XXX probabaly check time to yield
+			handle_refill_work(wpool);
+		}
+	}
 	return 0;
 }
 
@@ -106,17 +212,19 @@ static int init_pgadvance_threads(void)
 {
 	int cpu;
 	struct task_struct *tsk;
+	struct pgadvancers_work_pool *wpool;
 
 	for_each_possible_cpu(cpu) {
-		tsk = kthread_create(pgadvancers_func, NULL, "pgadvancers%d", cpu);
-		if (IS_ERR(tsk)) {
-			pr_err("Fail to create pgadvancer for CPU %d\n", cpu);
+		tsk = kthread_create(pgadvancers_func, NULL, "kpgadvancer/%d", cpu);
+		if (IS_ERR(tsk))
 			return -EFAULT;
-		}
 		kthread_bind(tsk, cpu);
 		wake_up_process(tsk);
 
 		per_cpu(pgadvancers, cpu) = tsk;
+
+		wpool = per_cpu_ptr(&pgadvancers_work_pool, cpu);
+		memset(wpool, 0, sizeof(*wpool));
 	}
 	return 0;
 }

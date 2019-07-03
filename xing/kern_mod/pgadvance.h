@@ -23,6 +23,7 @@ enum pgadvance_list_type {
 struct pgadvance_list {
 	int count;
 	int watermark;
+	int high;
 	int batch;
 	struct list_head head;
 } ____cacheline_aligned;
@@ -30,5 +31,16 @@ struct pgadvance_list {
 struct pgadvance_set {
 	struct pgadvance_list lists[NR_PGADVANCE_TYPES];
 } ____cacheline_aligned;
+
+struct pgadvancers_work_info {
+	u32 request_cpu;
+	u32 list_type;
+} __packed;
+
+#define NR_PERCPU_WORK 64
+struct pgadvancers_work_pool {
+	u64 bitmap;
+	struct pgadvancers_work_info pool[NR_PERCPU_WORK];
+} ____cacheline_aligned __packed;
 
 #endif /* _PAGEADVANCE_H_ */
