@@ -7,6 +7,7 @@
  * (at your option) any later version.
  */
 
+#include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/kthread.h>
@@ -17,23 +18,62 @@
 #include "../config.h"
 
 struct pgadvance_set *pas __percpu;
+DEFINE_PER_CPU(struct task_struct *, pgadvancers);
+
+static void refill_list(struct pgadvance_list *list, int cpu,
+			enum pgadvance_list_type type,
+			int nr_to_fill)
+{
+	int i;
+	struct page *page;
+	gfp_t flags = GFP_KERNEL;
+
+	//pr_info("%s(): %d-%s %#lx nr:%d cpu:%d\n",
+	//	__func__, current->pid, current->comm, (unsigned long)list, nr_to_fill, cpu);
+
+	if (type == PGADVANCE_TYPE_ZERO)
+		flags |= __GFP_ZERO;
+
+	for (i = 0; i < nr_to_fill; i++) {
+		page = alloc_page(flags);
+		if (!page) {
+			WARN_ONCE(1, "Fail to alloc");
+			break;
+		}
+		list_add(&page->lru, &list->head);
+	}
+	list->count += i;
+}
 
 static struct page *cb_alloc_zero_page(void)
 {
-	return alloc_page(__GFP_MOVABLE|__GFP_ZERO);
+	struct pgadvance_set *p = this_cpu_ptr(pas);
+	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_ZERO];
+	struct page *page;
+
+	if (unlikely(!l->count))
+		refill_list(l, smp_processor_id(), PGADVANCE_TYPE_ZERO, l->batch);	
+
+	page = list_first_entry(&l->head, struct page, lru);
+	list_del(&page->lru);
+	l->count--;
+	return page;
 }
 
 struct pgadvance_callbacks pcb = {
 	.alloc_zero_page = cb_alloc_zero_page
 };
 
-/*
- * Refill a certain list to meet its watermark.
- */
-static void refill_list(struct pgadvance_list *list, int cpu,
-			enum pgadvance_list_type type)
+/* Free all pages of a given list */
+static void free_list(struct pgadvance_list *list)
 {
-	int batch = list->batch;
+	struct page *page;
+
+	while (!list_empty(&list->head)) {
+		page = list_first_entry(&list->head, struct page, lru);
+		list_del(&page->lru);
+		put_page(page);
+	}
 }
 
 static int cal_watermark(void)
@@ -46,6 +86,10 @@ static int cal_batch(void)
 	return 32;
 }
 
+/*
+ * Allocate percpu data structure and alloc pages
+ * to fill all the lists.
+ */
 static int init_percpu_sets(void)
 {
 	enum pgadvance_list_type type;
@@ -69,7 +113,7 @@ static int init_percpu_sets(void)
 			l->watermark = watermark;
 			l->batch = batch;
 			INIT_LIST_HEAD(&l->head);
-			refill_list(l, cpu, type);
+			refill_list(l, cpu, type, watermark);
 		}
 	}
 	return 0;
@@ -77,9 +121,68 @@ static int init_percpu_sets(void)
 
 static void free_percpu_sets(void)
 {
+	int cpu;
+	enum pgadvance_list_type type;
+
 	if (!pas)
 		return;
+
+	for_each_possible_cpu(cpu) {
+		struct pgadvance_set *p = per_cpu_ptr(pas, cpu);
+		struct pgadvance_list *l;
+
+		for (type = 0; type < NR_PGADVANCE_TYPES; type++) {
+			l = &p->lists[type];
+			free_list(l);
+		}
+	}
 	free_percpu(pas);
+}
+
+static int pgadvancers_func(void *_unused)
+{
+	pr_crit("%s CPU %d run\n", current->comm, smp_processor_id());
+	while (1) {
+		schedule();
+		if (kthread_should_stop())
+			break;
+	}
+	pr_crit("%s CPU %d exit\n", current->comm, smp_processor_id());
+
+	return 0;
+}
+
+static void exit_pgadvance_threads(void)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct task_struct *tsk = per_cpu_ptr(pgadvancers, cpu);
+		pr_crit("Exit cpu %d tsk %#lx\n", cpu, (unsigned long)tsk);
+		if (tsk) {
+			kthread_stop(tsk);
+		}
+	}
+}
+
+static int init_pgadvance_threads(void)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct task_struct *tsk = per_cpu_ptr(pgadvancers, cpu);
+
+		tsk = kthread_create(pgadvancers_func, NULL, "pgadvancers%d", cpu);
+		if (IS_ERR(tsk)) {
+			tsk = NULL;
+			pr_err("Fail to create pgadvancer for CPU %d\n", cpu);
+			return -EFAULT;
+		}
+
+		kthread_bind(tsk, cpu);
+		wake_up_process(tsk);
+	}
+	return 0;
 }
 
 static int pgadvance_init(void)
@@ -90,8 +193,15 @@ static int pgadvance_init(void)
 	if (ret)
 		return ret;
 
+	ret = init_pgadvance_threads();
+	if (ret) {
+		free_percpu_sets();
+		return ret;
+	}
+
 	ret = register_pgadvance_callbacks(&pcb);
 	if (ret) {
+		exit_pgadvance_threads();
 		free_percpu_sets();
 		return ret;
 	}
@@ -105,7 +215,10 @@ static void pgadvance_exit(void)
 	 * otherwise it might intermingle.
 	 */
 	unregister_pgadvance_callbacks();
+	exit_pgadvance_threads();
 	free_percpu_sets();
+
+	mdelay(10000);
 }
 
 module_init(pgadvance_init);
