@@ -15,22 +15,112 @@
 #include <linux/percpu.h>
 #include <linux/pgadvance.h>
 #include "pgadvance.h"
-#include "../config.h"
+#include "../../config.h"
 
-static DEFINE_PER_CPU(struct pgadvance_set, pas);
-static DEFINE_PER_CPU(struct task_struct *, pgadvancers);
-static DEFINE_PER_CPU(struct pgadvancers_work_pool, pgadvancers_work_pool);
+DEFINE_PER_CPU(struct pgadvance_set, pas);
+DEFINE_PER_CPU(struct task_struct *, pgadvancers);
+DEFINE_PER_CPU(struct pgadvancers_work_pool, pgadvancers_work_pool);
 
-static void refill_list(struct pgadvance_list *list, int cpu,
-			enum pgadvance_list_type type,
-			int nr_to_fill)
+static inline void request_refill(enum pgadvance_list_type type);
+static void refill_list(struct pgadvance_list *l, int cpu,
+			enum pgadvance_list_type type, int nr_to_fill);
+
+static inline struct page *dequeue_page(struct pgadvance_list *l)
+{
+	struct page *page;
+
+	spin_lock(&l->lock);
+	page = list_first_entry(&l->head, struct page, lru);
+	list_del(&page->lru);
+	l->count--;
+	spin_unlock(&l->lock);
+	return page;
+}
+
+static inline void enqueue_pages(struct pgadvance_list *l,
+				 struct list_head *new_pages, int nr)
+{
+	spin_lock(&l->lock);
+	list_splice(new_pages, &l->head);
+	l->count += nr;
+	spin_unlock(&l->lock);
+}
+
+/*
+ * Callback for do_anonymous_page()
+ */
+static struct page *cb_alloc_zero_page(void)
+{
+	struct pgadvance_set *p = this_cpu_ptr(&pas);
+	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_ZERO];
+	struct page *page;
+
+	if (unlikely(l->count <= l->watermark)) {
+		/*
+		 * XXX Knob
+		 *
+		 * When should we send requests???
+		 */
+		//if (!test_pgadvance_list_requested(l)) {
+		if (1) {
+			inc_stat(NR_REQUEST_REFILL_ZERO);
+
+			request_refill(PGADVANCE_TYPE_ZERO);
+			set_pgadvance_list_requested(l);
+		}
+	}
+
+	/*
+	 * This will happen only if remote is too slow or congested.
+	 * We can also refill by ourselves but that's too slow.
+	 */
+	if (unlikely(!l->count)) {
+		/*
+		 * XXX Knob
+		 *
+		 * What should be do here? alloc one and fast return
+		 * or refill a batch?
+		 */
+		inc_stat(NR_SYNC_REFILL_ZERO);
+		//return alloc_page(GFP_KERNEL | __GFP_ZERO);
+		refill_list(l, smp_processor_id(), PGADVANCE_TYPE_ZERO, l->batch);
+	}
+
+	page = dequeue_page(l);
+
+	inc_stat(NR_PAGES_ALLOC_ZERO);
+	return page;
+}
+
+static struct pgadvance_callbacks pcb = {
+	.alloc_zero_page = cb_alloc_zero_page
+};
+
+static int cal_high(void)
+{
+	return 512;
+}
+
+static int cal_watermark(void)
+{
+	return 300;
+}
+
+static int cal_batch(void)
+{
+	return 256;
+}
+
+static void refill_list(struct pgadvance_list *l, int cpu,
+			enum pgadvance_list_type type, int nr_to_fill)
 {
 	int i;
 	struct page *page;
 	gfp_t flags = GFP_KERNEL;
+	LIST_HEAD(new_pages);
 
-	//pr_info("%s(): %d-%s %#lx nr:%d cpu:%d\n",
-	//	__func__, current->pid, current->comm, (unsigned long)list, nr_to_fill, cpu);
+	trace_printk("%s(): %d-%s nr_to_fill:%d cpu:%d\n",
+		__func__, current->pid, current->comm, nr_to_fill, cpu);
 
 	if (type == PGADVANCE_TYPE_ZERO)
 		flags |= __GFP_ZERO;
@@ -41,18 +131,26 @@ static void refill_list(struct pgadvance_list *list, int cpu,
 			WARN_ON_ONCE(1);
 			break;
 		}
-		list_add(&page->lru, &list->head);
+		list_add(&page->lru, &new_pages);
 	}
-	list->count += i;
+
+	inc_stat(NR_REFILLS_COMPLETED);
+	enqueue_pages(l, &new_pages, i);
 }
 
-//XXX
+/*
+ * TODO:
+ * Need to choose a light-loaded CPU.
+ * Based on what? Candidates:
+ * - sched load
+ * - our own stats
+ */
 static inline int choose_refill_cpu(void)
 {
 	return 21;
 }
 
-static inline void send_refill_work(enum pgadvance_list_type type)
+static inline void request_refill(enum pgadvance_list_type type)
 {
 	int refill_cpu;
 	struct pgadvancers_work_pool *wpool;
@@ -82,42 +180,10 @@ static inline void send_refill_work(enum pgadvance_list_type type)
 	winfo.list_type = type;
 	memcpy(&wpool->pool[index], &winfo, sizeof(winfo));
 
-	pr_crit("%s()-cpu%d: refill_cpu=%d, index=%d, bitmap=%#lx\n",
-		__func__, smp_processor_id(), refill_cpu, index, *_bitmap);
-}
+	wake_up_process(per_cpu(pgadvancers, refill_cpu));
 
-/*
- * Callback for do_anonymous_page()
- */
-static struct page *cb_alloc_zero_page(void)
-{
-	struct pgadvance_set *p = this_cpu_ptr(&pas);
-	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_ZERO];
-	struct page *page;
-
-	if (unlikely(!l->count)) {
-		send_refill_work(PGADVANCE_TYPE_ZERO);
-		refill_list(l, smp_processor_id(), PGADVANCE_TYPE_ZERO, l->batch);	
-	}
-
-	page = list_first_entry(&l->head, struct page, lru);
-	list_del(&page->lru);
-	l->count--;
-	return page;
-}
-
-static struct pgadvance_callbacks pcb = {
-	.alloc_zero_page = cb_alloc_zero_page
-};
-
-static int cal_watermark(void)
-{
-	return 128;
-}
-
-static int cal_batch(void)
-{
-	return 32;
+	trace_printk("%s()-cpu%d: refill_cpu=%d, index=%d, bitmap=%#lx\n",
+		__func__, smp_processor_id(), refill_cpu, index, (unsigned long)*_bitmap);
 }
 
 static inline void do_handle_refill_work(struct pgadvancers_work_info *winfo)
@@ -130,7 +196,15 @@ static inline void do_handle_refill_work(struct pgadvancers_work_info *winfo)
 	ps = per_cpu_ptr(&pas, request_cpu);
 	pl = &ps->lists[type];
 
-	refill_list(pl, request_cpu, type, pl->batch);
+	/*
+	 * XXX Knob
+	 *
+	 * Shall we check if the list already high enough??
+	 * Really depends on the behavior how requests are sent out.
+	 */
+	if (pl->count < pl->high)
+		refill_list(pl, request_cpu, type, pl->batch);
+	clear_pgadvance_list_requested(pl);
 }
 
 /*
@@ -144,10 +218,6 @@ static inline void handle_refill_work(struct pgadvancers_work_pool *wpool)
 	u64 old, new;
 	int index;
 
-	/*
-	 * XXX
-	 * Think about what's the correct way to get data
-	 */
 	for (;;) {
 		old = *_bitmap;
 		index = fls64(old);
@@ -167,9 +237,9 @@ static inline void handle_refill_work(struct pgadvancers_work_pool *wpool)
 		if (new == old)
 			break;
 	}
-	//do_handle_refill_work(&winfo);
+	do_handle_refill_work(&winfo);
 
-	pr_crit("%s(): index=%d request_cpu=%2d\n",
+	trace_printk("%s(): index=%d request_cpu=%2d\n",
 		__func__, index, winfo.request_cpu);
 }
 
@@ -264,10 +334,11 @@ static void free_percpu_sets(void)
 static int init_percpu_sets(void)
 {
 	enum pgadvance_list_type type;
-	int cpu, watermark, batch;
+	int cpu, watermark, batch, high;
 
 	watermark = cal_watermark();
 	batch = cal_batch();
+	high = cal_high();
 
 	for_each_possible_cpu(cpu) {
 		struct pgadvance_set *p = per_cpu_ptr(&pas, cpu);
@@ -276,11 +347,20 @@ static int init_percpu_sets(void)
 		for (type = 0; type < NR_PGADVANCE_TYPES; type++) {
 			l = &p->lists[type];
 
+			l->flags = 0;
 			l->count = 0;
-			l->watermark = watermark;
+			l->high = high;
 			l->batch = batch;
+			l->watermark = watermark;
 			INIT_LIST_HEAD(&l->head);
-			refill_list(l, cpu, type, watermark);
+			spin_lock_init(&l->lock);
+
+			/*
+			 * Let's start from the high count.
+			 * During runtime, once it dropped below watermark,
+			 * it will ask for refill.
+			 */
+			refill_list(l, cpu, type, l->high);
 		}
 	}
 	return 0;
@@ -306,6 +386,14 @@ static int pgadvance_init(void)
 		free_percpu_sets();
 		return ret;
 	}
+
+	ret = create_proc_files();
+	if (ret) {
+		unregister_pgadvance_callbacks();
+		exit_pgadvance_threads();
+		free_percpu_sets();
+		return ret;
+	}
 	return 0;
 }
 
@@ -315,6 +403,7 @@ static void pgadvance_exit(void)
 	 * Unregister first then deallocate resources
 	 * otherwise it might intermingle.
 	 */
+	remove_proc_files();
 	unregister_pgadvance_callbacks();
 	exit_pgadvance_threads();
 	free_percpu_sets();
