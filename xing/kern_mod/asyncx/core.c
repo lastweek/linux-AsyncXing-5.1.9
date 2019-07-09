@@ -12,7 +12,7 @@
 #include <linux/kthread.h>
 #include <linux/kprobes.h>
 #include "xing.h"
-#include "../config.h"
+#include "../../config.h"
 
 static void __used dump_aci(struct async_crossing_info *aci)
 {

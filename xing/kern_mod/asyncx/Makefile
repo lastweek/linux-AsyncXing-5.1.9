@@ -2,7 +2,9 @@
 # Copyright (C) 2019 Yizhou Shan. All rights reserved.
 #
 
-obj-m := asyncx.o pgadvance.o
+obj-m := asyncx.o
+
+asyncx-y := core.o flatcomb.o
 
 # Targets
 all:
