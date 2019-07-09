@@ -23,7 +23,7 @@ DEFINE_PER_CPU(struct pgadvancers_work_pool, pgadvancers_work_pool);
 
 static inline void request_refill(enum pgadvance_list_type type);
 static void refill_list(struct pgadvance_list *l, int cpu,
-			enum pgadvance_list_type type, int nr_to_fill);
+			enum pgadvance_list_type type, unsigned int nr_to_fill);
 
 static inline struct page *dequeue_page(struct pgadvance_list *l)
 {
@@ -58,37 +58,33 @@ static struct page *cb_alloc_zero_page(void)
 	if (unlikely(l->count <= l->watermark)) {
 		/*
 		 * XXX Knob
-		 *
-		 * When should we send requests???
 		 */
-		//if (!test_pgadvance_list_requested(l)) {
-		if (1) {
+#if 0
+		if (!test_pgadvance_list_requested(l)) {
 			inc_stat(NR_REQUEST_REFILL_ZERO);
 
 			request_refill(PGADVANCE_TYPE_ZERO);
 			set_pgadvance_list_requested(l);
 		}
+#else
+		inc_stat(NR_REQUEST_REFILL_ZERO);
+		request_refill(PGADVANCE_TYPE_ZERO);
+#endif
 	}
 
 	/*
 	 * This will happen only if remote is too slow or congested.
 	 * We can also refill by ourselves but that's too slow.
+	 * So fallback allocate one and return;
 	 */
 	if (unlikely(!l->count)) {
-		/*
-		 * XXX Knob
-		 *
-		 * What should be do here? alloc one and fast return
-		 * or refill a batch?
-		 */
 		inc_stat(NR_SYNC_REFILL_ZERO);
-		//return alloc_page(GFP_KERNEL | __GFP_ZERO);
-		refill_list(l, smp_processor_id(), PGADVANCE_TYPE_ZERO, l->batch);
+		return alloc_page(GFP_KERNEL | __GFP_ZERO);
 	}
 
-	page = dequeue_page(l);
-
 	inc_stat(NR_PAGES_ALLOC_ZERO);
+
+	page = dequeue_page(l);
 	return page;
 }
 
@@ -112,21 +108,24 @@ static int cal_batch(void)
 }
 
 static void refill_list(struct pgadvance_list *l, int cpu,
-			enum pgadvance_list_type type, int nr_to_fill)
+			enum pgadvance_list_type type, unsigned int nr_to_fill)
 {
-	int i;
+	int i, node;
 	struct page *page;
 	gfp_t flags = GFP_KERNEL;
 	LIST_HEAD(new_pages);
 
-	trace_printk("%s(): %d-%s nr_to_fill:%d cpu:%d\n",
-		__func__, current->pid, current->comm, nr_to_fill, cpu);
+	nr_to_fill = min(nr_to_fill, l->high);
+	node = cpu_to_node(cpu);
+
+	trace_printk("%s(): %d-%s nr_to_fill:%d cpu:%d node:%d\n",
+		__func__, current->pid, current->comm, nr_to_fill, cpu, node);
 
 	if (type == PGADVANCE_TYPE_ZERO)
 		flags |= __GFP_ZERO;
 
 	for (i = 0; i < nr_to_fill; i++) {
-		page = alloc_page(flags);
+		page = alloc_pages_node(node, flags, 0);
 		if (!page) {
 			WARN_ON_ONCE(1);
 			break;
@@ -166,6 +165,13 @@ static inline void request_refill(enum pgadvance_list_type type)
 	/* Reserve the slot */
 	for (;;) {
 		old = *_bitmap;
+
+		/* Remote slots are full */
+		if (unlikely(old == ~0UL)) {
+			inc_stat(NR_REQUEST_REFILL_FAILED);
+			return;
+		}
+
 		index = ffz(old);
 
 		new = old | (1ULL << index);
@@ -203,7 +209,7 @@ static inline void do_handle_refill_work(struct pgadvancers_work_info *winfo)
 	 * Really depends on the behavior how requests are sent out.
 	 */
 	if (pl->count < pl->high)
-		refill_list(pl, request_cpu, type, pl->batch);
+		refill_list(pl, request_cpu, type, (pl->high - pl->count));
 	clear_pgadvance_list_requested(pl);
 }
 

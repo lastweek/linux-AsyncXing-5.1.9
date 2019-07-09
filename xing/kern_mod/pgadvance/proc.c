@@ -52,6 +52,7 @@ static void show_pgadvance_stats_sum(struct seq_file *f)
 
 	sum_pgadvance_stats(stats);
 
+	seq_printf(f, "[Global Stats]\n");
 	seq_printf(f, "%-30s  %10s\n", "Events", "Sum");
 	for (i = 0; i < NR_PGADVANCE_STAT_ITEMS; i++) {
 		seq_printf(f, "%-30s %10lu\n",
@@ -66,6 +67,7 @@ static void show_pgadvance_stats_percpu(struct seq_file *f)
 	int i, cpu;
 	struct pgadvance_stats *this;
 
+	seq_printf(f, "[Percpu Stats]\n");
 	seq_printf(f, "%-30s  ", "Events");
 	for_each_possible_cpu(cpu)
 		seq_printf(f, "%10d ", cpu);

@@ -96,6 +96,8 @@ enum pgadvance_stat_item {
 
 	NR_REFILLS_COMPLETED,
 
+	NR_REQUEST_REFILL_FAILED,
+
 	NR_PGADVANCE_STAT_ITEMS
 };
 

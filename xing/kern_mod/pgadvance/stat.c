@@ -44,4 +44,6 @@ const char *const pgadvance_stat_text[] = {
 	"sync_refill_normal",
 
 	"refills_completed",
+
+	"async_request_refill_fail",
 };
