@@ -14,4 +14,10 @@
 #include "xing.h"
 #include "../../config.h"
 
+/*
+ * Careful about concurrent faults on the same address.
+ */
+void flatcomb_faults(struct asyncx_delegate_info **adi_array)
+{
 
+}
