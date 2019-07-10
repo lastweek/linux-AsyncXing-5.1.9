@@ -57,7 +57,15 @@ static struct page *cb_alloc_zero_page(void)
 
 	if (unlikely(l->count <= l->watermark)) {
 		/*
-		 * XXX Knob
+		 * Knob:
+		 *
+		 * do_anonymous_page() is super fast.
+		 * The async-refill is slow due to zeroing.
+		 * Thus sending one request per lower watermark incident
+		 * cannot keep up with the highest page fault rate.
+		 *
+		 * At this point, I'm not sure what would it be
+		 * for real applications. Let's leave this knobs open.
 		 */
 #if 0
 		if (!test_pgadvance_list_requested(l)) {
@@ -88,8 +96,55 @@ static struct page *cb_alloc_zero_page(void)
 	return page;
 }
 
+static struct page *cb_alloc_normal_page(void)
+{
+	struct pgadvance_set *p = this_cpu_ptr(&pas);
+	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_NORMAL];
+	struct page *page;
+
+	if (unlikely(l->count <= l->watermark)) {
+		/*
+		 * Knob:
+		 *
+		 * Well. This actually works well for do_cow_page()
+		 * I think mostly due to two reasons:
+		 * 1) The caller needs to copy_page, which is slow
+		 * 2) The server does not need to clear page.
+		 * With this two factors, it's actually enough
+		 * to just send one request per lower watermark incident.
+		 */
+#if 1
+		if (!test_pgadvance_list_requested(l)) {
+			inc_stat(NR_REQUEST_REFILL_NORMAL);
+
+			request_refill(PGADVANCE_TYPE_NORMAL);
+			set_pgadvance_list_requested(l);
+		}
+#else
+		inc_stat(NR_REQUEST_REFILL_NORMAL);
+		request_refill(PGADVANCE_TYPE_NORMAL);
+#endif
+	}
+
+	/*
+	 * This will happen only if remote is too slow or congested.
+	 * We can also refill by ourselves but that's too slow.
+	 * So fallback allocate one and return;
+	 */
+	if (unlikely(!l->count)) {
+		inc_stat(NR_SYNC_REFILL_NORMAL);
+		return alloc_page(GFP_KERNEL);
+	}
+
+	inc_stat(NR_PAGES_ALLOC_NORMAL);
+
+	page = dequeue_page(l);
+	return page;
+}
+
 static struct pgadvance_callbacks pcb = {
-	.alloc_zero_page = cb_alloc_zero_page
+	.alloc_zero_page	= cb_alloc_zero_page,
+	.alloc_normal_page	= cb_alloc_normal_page,
 };
 
 static int cal_high(void)

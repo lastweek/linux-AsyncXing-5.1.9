@@ -15,7 +15,7 @@
 
 enum pgadvance_list_type {
 	PGADVANCE_TYPE_ZERO,
-	PGADVANCE_TYPE_NROMAL,
+	PGADVANCE_TYPE_NORMAL,
 
 	NR_PGADVANCE_TYPES
 };
@@ -24,7 +24,7 @@ static inline char *list_type_name(enum pgadvance_list_type type)
 {
 	switch (type) {
 	case PGADVANCE_TYPE_ZERO:	return "ZERO";
-	case PGADVANCE_TYPE_NROMAL:	return "NORMAL";
+	case PGADVANCE_TYPE_NORMAL:	return "NORMAL";
 	default:			return "UNKNOWN";
 	};
 	return "BUG";

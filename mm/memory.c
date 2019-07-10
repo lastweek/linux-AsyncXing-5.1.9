@@ -3470,6 +3470,30 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 	return ret;
 }
 
+static inline struct page *
+INTERCEPT_alloc_page_vma(gfp_t flags, struct vm_area_struct *vma,
+			 unsigned long address)
+{
+	if (likely(pcb_live.alloc_normal_page))
+		return pcb_live.alloc_normal_page();
+	else
+		return alloc_page_vma(flags, vma, address);
+}
+
+/*
+ * HACK:
+ *
+ * This function is called on a file-based MAP_PRIVATE mmap() region,
+ * which means the process owns a private copy.
+ *
+ * The flow is:
+ * 1) Allocate a new page: vmf->cow_page
+ * 2) Callback to vm_ops->fault() to get the page from pagecache/disk.
+ *    The page is saved to vmf->page.
+ * 3) Copy the file content from vmf->page to vmf->cow_page
+ * 4) Use vmf->cow_page to establish PTE.
+ * 5) Resume. App write to the private cow_page.
+ */
 static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 {
 	struct vm_area_struct *vma = vmf->vma;
@@ -3478,7 +3502,8 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 	if (unlikely(anon_vma_prepare(vma)))
 		return VM_FAULT_OOM;
 
-	vmf->cow_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, vmf->address);
+	//vmf->cow_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, vmf->address);
+	vmf->cow_page = INTERCEPT_alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, vmf->address);
 	if (!vmf->cow_page)
 		return VM_FAULT_OOM;
 
