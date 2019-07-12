@@ -16,6 +16,13 @@ enum async_crossing_cmd {
 	ASYNCX_GET,
 };
 
+/*
+ * Per-thread information.
+ * Set by async_crossing SYSCALL.
+ */
+#define FLAG_DISABLE_PGFAULT_INTERCEPT	0x1
+#define FLAG_DISABLE_LRU		0x2
+
 struct async_crossing_info {
 	unsigned long flags;
 	unsigned long jmp_user_address;
@@ -31,6 +38,19 @@ struct async_crossing_info {
 	struct page *p_shared_pages;
 	void *kva_shared_pages;
 };
+
+/*
+ * It's not a safe check. AnYwaYs.
+ */
+static inline bool aci_disable_lru(struct task_struct *tsk)
+{
+	struct async_crossing_info *aci = tsk->aci;
+	if (!aci)
+		return false;
+	if (aci->flags & FLAG_DISABLE_LRU)
+		return true;
+	return false;
+}
 
 /*
  * Shared poll page -> flags

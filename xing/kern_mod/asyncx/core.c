@@ -38,6 +38,10 @@ static int handle_asyncx_set(struct async_crossing_info __user * uinfo)
 		return -EFAULT;
 	}
 
+	/*
+	 * Get the kernel virtual address of the shared page.
+	 * User must setup the page..
+	 */
 	ret = get_user_pages(kinfo->shared_pages, 1, 0, &page, NULL);
 	kinfo->p_shared_pages = page;
 	kinfo->kva_shared_pages = page_to_virt(page);
@@ -212,9 +216,12 @@ cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
 
 	/* Check if registered */
 	aci = current->aci;
-	if (unlikely(!aci)) {
+	if (unlikely(!aci))
 		return ASYNCX_PGFAULT_NOT_INTERCEPTED;
-	}
+
+	/* Check if intercept is disabled */
+	if (unlikely(aci->flags & FLAG_DISABLE_PGFAULT_INTERCEPT))
+		return ASYNCX_PGFAULT_NOT_INTERCEPTED;
 
 	user_page = aci->kva_shared_pages;
 
@@ -229,6 +236,10 @@ cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
 	}
 	set_intercepted(user_page);
 #endif
+
+	/*
+	 * All good, go for it..
+	 */
 
 	/* Delegate pgfault to remote CPU */
 	intercept_delegate(current, vma, address, flags);
