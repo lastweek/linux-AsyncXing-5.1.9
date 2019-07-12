@@ -7,6 +7,7 @@
  * (at your option) any later version.
  */
 
+#include <linux/nmi.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/kthread.h>
@@ -181,6 +182,8 @@ static int worker_thread_func(void *_unused)
 
 		if (kthread_should_stop())
 			break;
+		//touch_nmi_watchdog();
+		schedule_timeout(10 * HZ);
 	}
 
 	pr_info("Delegation thread exit CPU %d\n", smp_processor_id());
@@ -314,7 +317,7 @@ int init_asyncx_thread(void)
 	 * Make sure the faulting CPU and the handling CPU
 	 * are on the same socket, seperate physical cores will be plus!
 	 */
-	cpu = 19; 
+	cpu = 22; 
 	worker_thread = kthread_create(worker_thread_func, NULL, "async_wrk");
 	if (IS_ERR(worker_thread))
 		return PTR_ERR(worker_thread);

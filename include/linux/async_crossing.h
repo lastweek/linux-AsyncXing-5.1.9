@@ -79,4 +79,17 @@ asyncx_measure_crossing_latency(struct pt_regs *regs)
 	return acb_live.measure_crossing_latency(regs);
 }
 
+/*
+ * It's not a safe check. AnYwaYs.
+ */
+static inline bool aci_disable_lru(struct task_struct *tsk)
+{
+	struct async_crossing_info *aci = tsk->aci;
+	if (!aci)
+		return false;
+	if (aci->flags & FLAG_DISABLE_LRU)
+		return true;
+	return false;
+}
+
 #endif /* _LINUX_ASYNC_CROSSING_H_ */

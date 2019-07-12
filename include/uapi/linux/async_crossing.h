@@ -40,19 +40,6 @@ struct async_crossing_info {
 };
 
 /*
- * It's not a safe check. AnYwaYs.
- */
-static inline bool aci_disable_lru(struct task_struct *tsk)
-{
-	struct async_crossing_info *aci = tsk->aci;
-	if (!aci)
-		return false;
-	if (aci->flags & FLAG_DISABLE_LRU)
-		return true;
-	return false;
-}
-
-/*
  * Shared poll page -> flags
  */
 #define ASYNCX_PGFAULT_DONE	0x00000001

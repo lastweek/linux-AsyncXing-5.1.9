@@ -71,6 +71,7 @@
 #include <linux/oom.h>
 #include <linux/numa.h>
 #include <linux/pgadvance.h>
+#include <linux/async_crossing.h>
 
 #include <asm/io.h>
 #include <asm/mmu_context.h>
