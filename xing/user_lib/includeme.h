@@ -6,6 +6,9 @@
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  */
+
+#define _GNU_SOURCE
+#include <sched.h>
 #include <sys/utsname.h>
 #include <math.h>
 #include <sys/time.h>
