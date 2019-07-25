@@ -21,7 +21,7 @@ DEFINE_PER_CPU(struct pgadvance_set, pas);
 DEFINE_PER_CPU(struct task_struct *, pgadvancers);
 DEFINE_PER_CPU(struct pgadvancers_work_pool, pgadvancers_work_pool);
 
-static inline void request_refill(enum pgadvance_list_type type);
+static void request_refill(enum pgadvance_list_type type);
 static void refill_list(struct pgadvance_list *l, int cpu,
 			enum pgadvance_list_type type, unsigned int nr_to_fill);
 
@@ -162,6 +162,7 @@ static int cal_batch(void)
 	return 256;
 }
 
+noinline
 static void refill_list(struct pgadvance_list *l, int cpu,
 			enum pgadvance_list_type type, unsigned int nr_to_fill)
 {
@@ -180,7 +181,7 @@ static void refill_list(struct pgadvance_list *l, int cpu,
 		flags |= __GFP_ZERO;
 
 	for (i = 0; i < nr_to_fill; i++) {
-		page = alloc_pages_node(node, flags, 0);
+		page = __alloc_pages_nodemask(flags, 0, node, NULL);
 		if (!page) {
 			WARN_ON_ONCE(1);
 			break;
@@ -192,6 +193,9 @@ static void refill_list(struct pgadvance_list *l, int cpu,
 	enqueue_pages(l, &new_pages, i);
 }
 
+DEFINE_PER_CPU(int, rr_counter);
+int nr_total_cpus;
+
 /*
  * TODO:
  * Need to choose a light-loaded CPU.
@@ -201,10 +205,18 @@ static void refill_list(struct pgadvance_list *l, int cpu,
  */
 static inline int choose_refill_cpu(void)
 {
-	return 21;
+	int cpu;
+
+retry:
+	cpu = this_cpu_read(rr_counter) % nr_total_cpus;
+	this_cpu_inc(rr_counter);
+	if (unlikely(cpu == smp_processor_id()))
+		goto retry;
+	return cpu;
 }
 
-static inline void request_refill(enum pgadvance_list_type type)
+noinline
+static void request_refill(enum pgadvance_list_type type)
 {
 	int refill_cpu;
 	struct pgadvancers_work_pool *wpool;
@@ -247,27 +259,6 @@ static inline void request_refill(enum pgadvance_list_type type)
 		__func__, smp_processor_id(), refill_cpu, index, (unsigned long)*_bitmap);
 }
 
-static inline void do_handle_refill_work(struct pgadvancers_work_info *winfo)
-{
-	int request_cpu = winfo->request_cpu;
-	enum pgadvance_list_type type = winfo->list_type;
-	struct pgadvance_set *ps;
-	struct pgadvance_list *pl;
-
-	ps = per_cpu_ptr(&pas, request_cpu);
-	pl = &ps->lists[type];
-
-	/*
-	 * XXX Knob
-	 *
-	 * Shall we check if the list already high enough??
-	 * Really depends on the behavior how requests are sent out.
-	 */
-	if (pl->count < pl->high)
-		refill_list(pl, request_cpu, type, (pl->high - pl->count));
-	clear_pgadvance_list_requested(pl);
-}
-
 /*
  * Find a pending work by scanning bitmap.
  * We will reset the bitmap before do the actual dirty work.
@@ -276,10 +267,15 @@ static inline void handle_refill_work(struct pgadvancers_work_pool *wpool)
 {
 	struct pgadvancers_work_info winfo;
 	u64 *_bitmap = &wpool->bitmap;
-	u64 old, new;
-	int index;
+	int request_cpu;
+	enum pgadvance_list_type type;
+	struct pgadvance_set *ps;
+	struct pgadvance_list *pl;
 
 	for (;;) {
+		u64 old, new;
+		int index;
+
 		old = *_bitmap;
 		index = fls64(old);
 		if (unlikely(!index)) {
@@ -298,10 +294,22 @@ static inline void handle_refill_work(struct pgadvancers_work_pool *wpool)
 		if (new == old)
 			break;
 	}
-	do_handle_refill_work(&winfo);
 
-	trace_printk("%s(): index=%d request_cpu=%2d\n",
-		__func__, index, winfo.request_cpu);
+	request_cpu = winfo.request_cpu;
+	type = winfo.list_type;
+
+	ps = per_cpu_ptr(&pas, request_cpu);
+	pl = &ps->lists[type];
+
+	/*
+	 * XXX Knob
+	 *
+	 * Shall we check if the list already high enough??
+	 * Really depends on the behavior how requests are sent out.
+	 */
+	if (pl->count < pl->high)
+		refill_list(pl, request_cpu, type, (pl->high - pl->count));
+	clear_pgadvance_list_requested(pl);
 }
 
 int pgadvance_wakeup_interval_s = 1;
@@ -319,8 +327,7 @@ static int pgadvancers_func(void *_unused)
 		if (kthread_should_stop())
 			break;
 
-		while (wpool->bitmap) {
-			//XXX probabaly check time to yield
+		while (likely(wpool->bitmap)) {
 			handle_refill_work(wpool);
 		}
 	}
@@ -430,6 +437,8 @@ static int init_percpu_sets(void)
 static int pgadvance_init(void)
 {
 	int ret;
+
+	nr_total_cpus = num_online_cpus();
 
 	ret = init_percpu_sets();
 	if (ret)

@@ -35,15 +35,15 @@ void sum_pgadvance_stats(unsigned long *ret)
 }
 
 const char *const pgadvance_stat_text[] = {
-	"alloc_zero",
-	"async_request_refill_zero",
-	"sync_refill_zero",
+	"nr_alloc_zero",
+	"nr_request_refill_zero",
+	"nr_sync_refill_zero",
 	
-	"alloc_normal",
-	"async_request_refill_normal",
-	"sync_refill_normal",
+	"nr_alloc_normal",
+	"nr_request_refill_normal",
+	"nr_sync_refill_normal",
 
-	"refills_completed",
+	"nr_refills_completed",
 
-	"async_request_refill_fail",
+	"nr_request_refill_fail",
 };
