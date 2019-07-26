@@ -72,6 +72,7 @@
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
 #include "internal.h"
+#include <linux/pgadvance.h>
 
 /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
 static DEFINE_MUTEX(pcp_batch_high_lock);
@@ -1133,7 +1134,13 @@ static __always_inline bool free_pages_prepare(struct page *page,
 		return false;
 
 	page_cpupid_reset_last(page);
-	page->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
+	
+	/*
+	 * HACK: Preserve the Page Advance bit
+	 */
+	//page->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
+	page->flags &= (~PAGE_FLAGS_CHECK_AT_PREP | (1UL << PG_pgadvance));
+
 	reset_page_owner(page, order);
 
 	if (!PageHighMem(page)) {
@@ -2627,8 +2634,8 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 {
 	int i, alloced = 0;
 
-	trace_printk("CPU %d Node %d. args(order=%u count=%lu migratetype=%d)",
-		smp_processor_id(), numa_node_id(), order, count, migratetype);
+	//trace_printk("CPU %d Node %d. args(order=%u count=%lu migratetype=%d)",
+	//	smp_processor_id(), numa_node_id(), order, count, migratetype);
 
 	spin_lock(&zone->lock);
 	for (i = 0; i < count; ++i) {
@@ -2931,6 +2938,13 @@ static void free_unref_page_commit(struct page *page, unsigned long pfn)
 			return;
 		}
 		migratetype = MIGRATE_MOVABLE;
+	}
+
+	if (PagePgAdvance(page)) {
+		if (likely(pcb_live.free_one_page)) {
+			pcb_live.free_one_page(page);
+			return;
+		}
 	}
 
 	pcp = &this_cpu_ptr(zone->pageset)->pcp;

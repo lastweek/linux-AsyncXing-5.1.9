@@ -13,6 +13,7 @@
 struct pgadvance_callbacks {
 	struct page *(*alloc_zero_page)(void);
 	struct page *(*alloc_normal_page)(void);
+	void (*free_one_page)(void *);
 };
 
 extern struct pgadvance_callbacks pcb_live;

@@ -51,6 +51,8 @@ struct pgadvancers_work_info {
 	u32 list_type;
 } __packed;
 
+#define INTEGRITY_FLAG	(0x80000000)
+
 #define NR_PERCPU_WORK 64
 struct pgadvancers_work_pool {
 	u64 bitmap;

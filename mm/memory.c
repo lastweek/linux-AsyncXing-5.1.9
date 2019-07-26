@@ -2670,6 +2670,16 @@ void unmap_mapping_range(struct address_space *mapping,
 }
 EXPORT_SYMBOL(unmap_mapping_range);
 
+static inline struct page *
+INTERCEPT_alloc_page_vma(gfp_t flags, struct vm_area_struct *vma,
+			 unsigned long address)
+{
+	if (likely(pcb_live.alloc_normal_page))
+		return pcb_live.alloc_normal_page();
+	else
+		return alloc_page_vma(flags, vma, address);
+}
+
 /*
  * We enter with non-exclusive mmap_sem (to exclude vma changes,
  * but allow concurrent faults), and pte mapped but not yet locked.
@@ -2726,8 +2736,8 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		if (si->flags & SWP_SYNCHRONOUS_IO &&
 				__swap_count(si, entry) == 1) {
 			/* skip swapcache */
-			page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma,
-							vmf->address);
+			//page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, vmf->address);
+			page = INTERCEPT_alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, vmf->address);
 			if (page) {
 				__SetPageLocked(page);
 				__SetPageSwapBacked(page);
@@ -3479,16 +3489,6 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
 		put_page(vmf->page);
 	return ret;
-}
-
-static inline struct page *
-INTERCEPT_alloc_page_vma(gfp_t flags, struct vm_area_struct *vma,
-			 unsigned long address)
-{
-	if (likely(pcb_live.alloc_normal_page))
-		return pcb_live.alloc_normal_page();
-	else
-		return alloc_page_vma(flags, vma, address);
 }
 
 /*

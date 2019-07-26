@@ -17,13 +17,18 @@
 #include "pgadvance.h"
 #include "../../config.h"
 
-DEFINE_PER_CPU(struct pgadvance_set, pas);
+DEFINE_PER_CPU_ALIGNED(struct pgadvance_set, pas);
+DEFINE_PER_CPU_ALIGNED(struct pgadvancers_work_pool, pgadvancers_work_pool);
 DEFINE_PER_CPU(struct task_struct *, pgadvancers);
-DEFINE_PER_CPU(struct pgadvancers_work_pool, pgadvancers_work_pool);
 
 static void request_refill(enum pgadvance_list_type type);
 static void refill_list(struct pgadvance_list *l, int cpu,
 			enum pgadvance_list_type type, unsigned int nr_to_fill);
+
+static inline void list_del_nodebug(struct list_head *entry)
+{
+	__list_del(entry->prev, entry->next);
+}
 
 static inline struct page *dequeue_page(struct pgadvance_list *l)
 {
@@ -31,7 +36,7 @@ static inline struct page *dequeue_page(struct pgadvance_list *l)
 
 	spin_lock(&l->lock);
 	page = list_first_entry(&l->head, struct page, lru);
-	list_del(&page->lru);
+	list_del_nodebug(&page->lru);
 	l->count--;
 	spin_unlock(&l->lock);
 	return page;
@@ -46,6 +51,23 @@ static inline void enqueue_pages(struct pgadvance_list *l,
 	spin_unlock(&l->lock);
 }
 
+static inline void enqueue_page(struct pgadvance_list *l, struct page *new)
+{
+	spin_lock(&l->lock);
+	list_add(&new->lru, &l->head);
+	l->count++;
+	spin_unlock(&l->lock);
+}
+
+static void cb_free_one_page(void *_page)
+{
+	struct pgadvance_set *p = this_cpu_ptr(&pas);
+	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_ZERO];
+	struct page *page = _page;
+
+	enqueue_page(l, page);
+}
+
 /*
  * Callback for do_anonymous_page()
  */
@@ -55,6 +77,7 @@ static struct page *cb_alloc_zero_page(void)
 	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_ZERO];
 	struct page *page;
 
+#if 0
 	if (unlikely(l->count <= l->watermark)) {
 		/*
 		 * Knob:
@@ -79,6 +102,7 @@ static struct page *cb_alloc_zero_page(void)
 		request_refill(PGADVANCE_TYPE_ZERO);
 #endif
 	}
+#endif
 
 	/*
 	 * This will happen only if remote is too slow or congested.
@@ -87,7 +111,7 @@ static struct page *cb_alloc_zero_page(void)
 	 */
 	if (unlikely(!l->count)) {
 		inc_stat(NR_SYNC_REFILL_ZERO);
-		return alloc_page(GFP_KERNEL | __GFP_ZERO);
+		return alloc_page(GFP_KERNEL | __GFP_ZERO | __GFP_MOVABLE);
 	}
 
 	inc_stat(NR_PAGES_ALLOC_ZERO);
@@ -113,7 +137,7 @@ static struct page *cb_alloc_normal_page(void)
 		 * With this two factors, it's actually enough
 		 * to just send one request per lower watermark incident.
 		 */
-#if 1
+#if 0
 		if (!test_pgadvance_list_requested(l)) {
 			inc_stat(NR_REQUEST_REFILL_NORMAL);
 
@@ -133,7 +157,7 @@ static struct page *cb_alloc_normal_page(void)
 	 */
 	if (unlikely(!l->count)) {
 		inc_stat(NR_SYNC_REFILL_NORMAL);
-		return alloc_page(GFP_KERNEL);
+		return alloc_page(GFP_KERNEL | __GFP_MOVABLE);
 	}
 
 	inc_stat(NR_PAGES_ALLOC_NORMAL);
@@ -145,6 +169,7 @@ static struct page *cb_alloc_normal_page(void)
 static struct pgadvance_callbacks pcb = {
 	.alloc_zero_page	= cb_alloc_zero_page,
 	.alloc_normal_page	= cb_alloc_normal_page,
+	.free_one_page		= cb_free_one_page,
 };
 
 static int cal_high(void)
@@ -159,23 +184,22 @@ static int cal_watermark(void)
 
 static int cal_batch(void)
 {
-	return 256;
+	return 16;
 }
 
-noinline
 static void refill_list(struct pgadvance_list *l, int cpu,
 			enum pgadvance_list_type type, unsigned int nr_to_fill)
 {
 	int i, node;
 	struct page *page;
-	gfp_t flags = GFP_KERNEL;
+	gfp_t flags = GFP_KERNEL | __GFP_MOVABLE;
 	LIST_HEAD(new_pages);
 
 	nr_to_fill = min(nr_to_fill, l->high);
 	node = cpu_to_node(cpu);
 
-	trace_printk("%s(): %d-%s nr_to_fill:%d cpu:%d node:%d\n",
-		__func__, current->pid, current->comm, nr_to_fill, cpu, node);
+	//trace_printk("%s(): %d-%s nr_to_fill:%d cpu:%d node:%d\n",
+	//	__func__, current->pid, current->comm, nr_to_fill, cpu, node);
 
 	if (type == PGADVANCE_TYPE_ZERO)
 		flags |= __GFP_ZERO;
@@ -186,7 +210,8 @@ static void refill_list(struct pgadvance_list *l, int cpu,
 			WARN_ON_ONCE(1);
 			break;
 		}
-		list_add(&page->lru, &new_pages);
+		//list_add(&page->lru, &new_pages);
+		__list_add(&page->lru, &new_pages, (&new_pages)->next);
 	}
 
 	inc_stat(NR_REFILLS_COMPLETED);
@@ -212,12 +237,13 @@ retry:
 	this_cpu_inc(rr_counter);
 	if (unlikely(cpu == smp_processor_id()))
 		goto retry;
+	cpu = 23;
 	return cpu;
 }
 
-noinline
 static void request_refill(enum pgadvance_list_type type)
 {
+#if 0
 	int refill_cpu;
 	struct pgadvancers_work_pool *wpool;
 	struct pgadvancers_work_info winfo;
@@ -250,13 +276,14 @@ static void request_refill(enum pgadvance_list_type type)
 
 	/* Then copy the work info */
 	winfo.request_cpu = smp_processor_id();
-	winfo.list_type = type;
+	winfo.list_type = type | INTEGRITY_FLAG;
 	memcpy(&wpool->pool[index], &winfo, sizeof(winfo));
 
-	wake_up_process(per_cpu(pgadvancers, refill_cpu));
+	//wake_up_process(per_cpu(pgadvancers, refill_cpu));
 
-	trace_printk("%s()-cpu%d: refill_cpu=%d, index=%d, bitmap=%#lx\n",
-		__func__, smp_processor_id(), refill_cpu, index, (unsigned long)*_bitmap);
+	//trace_printk("%s()-cpu%d: refill_cpu=%d, index=%d, bitmap=%#lx\n",
+	//	__func__, smp_processor_id(), refill_cpu, index, (unsigned long)*_bitmap);
+#endif
 }
 
 /*
@@ -271,10 +298,10 @@ static inline void handle_refill_work(struct pgadvancers_work_pool *wpool)
 	enum pgadvance_list_type type;
 	struct pgadvance_set *ps;
 	struct pgadvance_list *pl;
+	int index;
 
 	for (;;) {
 		u64 old, new;
-		int index;
 
 		old = *_bitmap;
 		index = fls64(old);
@@ -288,7 +315,12 @@ static inline void handle_refill_work(struct pgadvancers_work_pool *wpool)
 		 * Grab the work info before reset the bitmap,
 		 * in case it got overrided immediately by another racing CPU.
 		 */
+retry:
 		memcpy(&winfo, &wpool->pool[index], sizeof(winfo));
+		if (unlikely(!(winfo.list_type & INTEGRITY_FLAG)))
+			goto retry;
+		memset(&wpool->pool[index], 0, sizeof(winfo));
+
 		new = old & ~(1ULL << index);
 		new = cmpxchg(_bitmap, old, new);
 		if (new == old)
@@ -309,6 +341,7 @@ static inline void handle_refill_work(struct pgadvancers_work_pool *wpool)
 	 */
 	if (pl->count < pl->high)
 		refill_list(pl, request_cpu, type, (pl->high - pl->count));
+
 	clear_pgadvance_list_requested(pl);
 }
 
@@ -318,18 +351,46 @@ int pgadvance_wakeup_interval_s = 1;
 static int pgadvancers_func(void *_unused)
 {
 	struct pgadvancers_work_pool *wpool;
+	int current_cpu, current_node;
+
+	pr_info("%s running on CPU %d\n", current->comm, smp_processor_id());
 
 	wpool = this_cpu_ptr(&pgadvancers_work_pool);
+	current_cpu = smp_processor_id();
+	current_node = numa_node_id();
 	while (1) {
-		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(pgadvance_wakeup_interval_s * HZ);
+		//set_current_state(TASK_INTERRUPTIBLE);
+		//schedule_timeout(pgadvance_wakeup_interval_s * HZ);
+		int cpu;
+
+		for_each_online_cpu(cpu) {
+			struct pgadvance_set *p = per_cpu_ptr(&pas, cpu);
+			struct pgadvance_list *l;
+			int type;
+
+			if (cpu == 22 || cpu == 23)
+				continue;
+
+			if (cpu_to_node(cpu) != current_node)
+				continue;
+
+			for (type = 0; type < NR_PGADVANCE_TYPES; type++) {
+				l = &p->lists[type];
+				if (l->count <= 256)
+					refill_list(l, cpu, type, l->high - l->count);
+			}
+		}
+		schedule();
+		//set_current_state(TASK_INTERRUPTIBLE);
+		//schedule_timeout(5);
 
 		if (kthread_should_stop())
 			break;
 
-		while (likely(wpool->bitmap)) {
-			handle_refill_work(wpool);
-		}
+		//while (likely(wpool->bitmap)) {
+		//	handle_refill_work(wpool);
+		//}
+
 	}
 	return 0;
 }
@@ -353,16 +414,18 @@ static int init_pgadvance_threads(void)
 	struct pgadvancers_work_pool *wpool;
 
 	for_each_possible_cpu(cpu) {
-		tsk = kthread_create(pgadvancers_func, NULL, "kpgadvancer/%d", cpu);
-		if (IS_ERR(tsk))
-			return -EFAULT;
-		kthread_bind(tsk, cpu);
-		wake_up_process(tsk);
+		if (cpu == 23 || cpu == 22) {
+			tsk = kthread_create(pgadvancers_func, NULL, "kpgadvancer/%d", cpu);
+			if (IS_ERR(tsk))
+				return -EFAULT;
+			kthread_bind(tsk, cpu);
+			wake_up_process(tsk);
 
-		per_cpu(pgadvancers, cpu) = tsk;
+			per_cpu(pgadvancers, cpu) = tsk;
 
-		wpool = per_cpu_ptr(&pgadvancers_work_pool, cpu);
-		memset(wpool, 0, sizeof(*wpool));
+			wpool = per_cpu_ptr(&pgadvancers_work_pool, cpu);
+			memset(wpool, 0, sizeof(*wpool));
+		}
 	}
 	return 0;
 }
@@ -464,6 +527,9 @@ static int pgadvance_init(void)
 		free_percpu_sets();
 		return ret;
 	}
+
+	set_cpu_active(22, false);
+	set_cpu_active(23, false);
 	return 0;
 }
 
@@ -477,6 +543,9 @@ static void pgadvance_exit(void)
 	unregister_pgadvance_callbacks();
 	exit_pgadvance_threads();
 	free_percpu_sets();
+
+	//set_cpu_active(22, true);
+	//set_cpu_active(23, true);
 }
 
 module_init(pgadvance_init);

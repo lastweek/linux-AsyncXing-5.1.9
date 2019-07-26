@@ -131,6 +131,11 @@ enum pageflags {
 	PG_young,
 	PG_idle,
 #endif
+	/*
+	 * HACK: Page Advance
+	 */
+	PG_pgadvance,
+
 	__NR_PAGEFLAGS,
 
 	/* Filesystems */
@@ -323,6 +328,8 @@ PAGEFLAG(Workingset, workingset, PF_HEAD)
 __PAGEFLAG(Slab, slab, PF_NO_TAIL)
 __PAGEFLAG(SlobFree, slob_free, PF_NO_TAIL)
 PAGEFLAG(Checked, checked, PF_NO_COMPOUND)	   /* Used by some filesystems */
+
+__PAGEFLAG(PgAdvance, pgadvance, PF_ANY)
 
 /* Xen */
 PAGEFLAG(Pinned, pinned, PF_NO_COMPOUND)
