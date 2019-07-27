@@ -19,20 +19,32 @@
 #include "pgadvance.h"
 #include "../../config.h"
 
+const char * const sublist_names[MIGRATE_PCPTYPES] = {
+	"Unmovable",
+	"Movable",
+	"Reclaimable",
+};
+
 static void show_pgadvance_list_info(struct seq_file *f,
 				     enum pgadvance_list_type type)
 {
-	int cpu;
+	int cpu, mt;
 	struct pgadvance_set *p;
 	struct pgadvance_list *l;
+	struct sublist *sl;
 
 	seq_printf(f, "List: %s\n", list_type_name(type));
-	seq_printf(f, "CPU    high    batch    watermark    count\n");
+	seq_printf(f, "CPU    Unmovable    Movable    Reclaimable\n");
 	for_each_possible_cpu(cpu) {
 		p = per_cpu_ptr(&pas, cpu);
 		l = &p->lists[type];
-		seq_printf(f, "%3d    %4d    %5d    %9d    %5d\n",
-			cpu, l->high, l->batch, l->watermark, l->count);
+
+		seq_printf(f, "%3d    ", cpu);
+		for (mt = 0; mt < MIGRATE_PCPTYPES; mt++) {
+			sl = &l->lists[mt];
+			seq_printf(f, "%8d    ", sl->count);
+		}
+		seq_printf(f, "\n");
 	}
 	seq_printf(f, "\n");
 }

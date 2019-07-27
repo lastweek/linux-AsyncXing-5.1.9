@@ -32,16 +32,21 @@ static inline char *list_type_name(enum pgadvance_list_type type)
 
 #define PGADVANCE_LIST_FLAG_REQUESTED	0x1
 
-struct pgadvance_list {
-	unsigned int flags;
+struct sublist {
 	unsigned int count;
 	unsigned int watermark;
 	unsigned int high;
-	unsigned int batch;
 	struct list_head head;
 	spinlock_t lock;
+};
+
+struct pgadvance_list {
+	struct sublist lists[MIGRATE_PCPTYPES];
 } ____cacheline_aligned __packed;
 
+/*
+ * Top per-cpu data structures
+ */
 struct pgadvance_set {
 	struct pgadvance_list lists[NR_PGADVANCE_TYPES];
 } ____cacheline_aligned;
@@ -58,23 +63,6 @@ struct pgadvancers_work_pool {
 	u64 bitmap;
 	struct pgadvancers_work_info pool[NR_PERCPU_WORK];
 } ____cacheline_aligned __packed;
-
-static inline void set_pgadvance_list_requested(struct pgadvance_list *l)
-{
-	l->flags |= PGADVANCE_LIST_FLAG_REQUESTED;
-}
-
-static inline void clear_pgadvance_list_requested(struct pgadvance_list *l)
-{
-	l->flags &= ~PGADVANCE_LIST_FLAG_REQUESTED;
-}
-
-static inline bool test_pgadvance_list_requested(struct pgadvance_list *l)
-{
-	if (l->flags & PGADVANCE_LIST_FLAG_REQUESTED)
-		return true;
-	return false;
-}
 
 extern DEFINE_PER_CPU(struct pgadvance_set, pas);
 extern DEFINE_PER_CPU(struct task_struct *, pgadvancers);
@@ -99,6 +87,8 @@ enum pgadvance_stat_item {
 	NR_REFILLS_COMPLETED,
 
 	NR_REQUEST_REFILL_FAILED,
+
+	NR_FREE,
 
 	NR_PGADVANCE_STAT_ITEMS
 };

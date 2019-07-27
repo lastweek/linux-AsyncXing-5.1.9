@@ -514,9 +514,10 @@ static void print_bad_pte(struct vm_area_struct *vma, unsigned long addr,
 	mapping = vma->vm_file ? vma->vm_file->f_mapping : NULL;
 	index = linear_page_index(vma, addr);
 
-	pr_alert("BUG: Bad page map in process %s  pte:%08llx pmd:%08llx\n",
+	pr_alert("BUG: Bad page map in process %s  pte:%08llx pmd:%08llx caller: %pS\n",
 		 current->comm,
-		 (long long)pte_val(pte), (long long)pmd_val(*pmd));
+		 (long long)pte_val(pte), (long long)pmd_val(*pmd),
+		 __builtin_return_address(0));
 	if (page)
 		dump_page(page, "bad pte");
 	pr_alert("addr:%p vm_flags:%08lx anon_vma:%p mapping:%p index:%lx\n",
@@ -2675,7 +2676,7 @@ INTERCEPT_alloc_page_vma(gfp_t flags, struct vm_area_struct *vma,
 			 unsigned long address)
 {
 	if (likely(pcb_live.alloc_normal_page))
-		return pcb_live.alloc_normal_page();
+		return pcb_live.alloc_normal_page(flags);
 	else
 		return alloc_page_vma(flags, vma, address);
 }
@@ -2909,7 +2910,7 @@ INTERCEPT_alloc_zeroed_user_highpage_movable(struct vm_area_struct *vma,
 					unsigned long vaddr)
 {
 	if (likely(pcb_live.alloc_zero_page))
-		return pcb_live.alloc_zero_page();
+		return pcb_live.alloc_zero_page(__GFP_MOVABLE|GFP_HIGHUSER);
 	else
 		return alloc_zeroed_user_highpage_movable(vma, vaddr);
 }

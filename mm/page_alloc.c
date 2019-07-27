@@ -310,6 +310,7 @@ EXPORT_SYMBOL(nr_online_nodes);
 #endif
 
 int page_group_by_mobility_disabled __read_mostly;
+EXPORT_SYMBOL(page_group_by_mobility_disabled);
 
 #ifdef CONFIG_DEFERRED_STRUCT_PAGE_INIT
 /*
@@ -1138,8 +1139,8 @@ static __always_inline bool free_pages_prepare(struct page *page,
 	/*
 	 * HACK: Preserve the Page Advance bit
 	 */
-	//page->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
-	page->flags &= (~PAGE_FLAGS_CHECK_AT_PREP | (1UL << PG_pgadvance));
+	page->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
+	//page->flags &= (~PAGE_FLAGS_CHECK_AT_PREP | (1UL << PG_pgadvance));
 
 	reset_page_owner(page, order);
 
@@ -2940,11 +2941,9 @@ static void free_unref_page_commit(struct page *page, unsigned long pfn)
 		migratetype = MIGRATE_MOVABLE;
 	}
 
-	if (PagePgAdvance(page)) {
-		if (likely(pcb_live.free_one_page)) {
-			pcb_live.free_one_page(page);
-			return;
-		}
+	if (likely(pcb_live.free_one_page)) {
+		pcb_live.free_one_page(page, migratetype);
+		return;
 	}
 
 	pcp = &this_cpu_ptr(zone->pageset)->pcp;

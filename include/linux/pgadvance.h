@@ -10,10 +10,12 @@
 #ifndef _LINUX_PGADVANCE_H_
 #define _LINUX_PGADVANCE_H_
 
+#include <linux/types.h>
+
 struct pgadvance_callbacks {
-	struct page *(*alloc_zero_page)(void);
-	struct page *(*alloc_normal_page)(void);
-	void (*free_one_page)(void *);
+	struct page *(*alloc_zero_page)(gfp_t flags);
+	struct page *(*alloc_normal_page)(gfp_t flags);
+	void (*free_one_page)(void *, int);
 };
 
 extern struct pgadvance_callbacks pcb_live;

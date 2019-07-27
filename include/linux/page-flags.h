@@ -810,6 +810,8 @@ static inline void ClearPageSlabPfmemalloc(struct page *page)
 	 1UL << PG_slab		| 1UL << PG_active 	|	\
 	 1UL << PG_unevictable	| __PG_MLOCKED)
 
+#define __PG_pgadvance (1UL << PG_pgadvance)
+
 /*
  * Flags checked when a page is prepped for return by the page allocator.
  * Pages being prepped should not have these flags set.  It they are set,

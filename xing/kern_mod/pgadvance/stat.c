@@ -46,4 +46,6 @@ const char *const pgadvance_stat_text[] = {
 	"nr_refills_completed",
 
 	"nr_request_refill_fail",
+
+	"nr_free",
 };

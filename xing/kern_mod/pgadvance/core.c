@@ -14,6 +14,7 @@
 #include <linux/kprobes.h>
 #include <linux/percpu.h>
 #include <linux/pgadvance.h>
+#include <linux/gfp.h>
 #include "pgadvance.h"
 #include "../../config.h"
 
@@ -21,148 +22,138 @@ DEFINE_PER_CPU_ALIGNED(struct pgadvance_set, pas);
 DEFINE_PER_CPU_ALIGNED(struct pgadvancers_work_pool, pgadvancers_work_pool);
 DEFINE_PER_CPU(struct task_struct *, pgadvancers);
 
-static void request_refill(enum pgadvance_list_type type);
-static void refill_list(struct pgadvance_list *l, int cpu,
-			enum pgadvance_list_type type, unsigned int nr_to_fill);
-
 static inline void list_del_nodebug(struct list_head *entry)
 {
 	__list_del(entry->prev, entry->next);
 }
 
-static inline struct page *dequeue_page(struct pgadvance_list *l)
+static inline struct page *dequeue_page(struct sublist *sl)
 {
 	struct page *page;
 
-	spin_lock(&l->lock);
-	page = list_first_entry(&l->head, struct page, lru);
+	spin_lock(&sl->lock);
+	page = list_first_entry(&sl->head, struct page, lru);
 	list_del_nodebug(&page->lru);
-	l->count--;
-	spin_unlock(&l->lock);
+	sl->count--;
+	spin_unlock(&sl->lock);
 	return page;
 }
 
-static inline void enqueue_pages(struct pgadvance_list *l,
-				 struct list_head *new_pages, int nr)
+static inline void
+enqueue_pages(struct sublist *sl, struct list_head *new_pages, int nr)
 {
-	spin_lock(&l->lock);
-	list_splice(new_pages, &l->head);
-	l->count += nr;
-	spin_unlock(&l->lock);
+	spin_lock(&sl->lock);
+	list_splice(new_pages, &sl->head);
+	sl->count += nr;
+	spin_unlock(&sl->lock);
 }
 
-static inline void enqueue_page(struct pgadvance_list *l, struct page *new)
+static inline void enqueue_page(struct sublist *sl, struct page *new)
 {
-	spin_lock(&l->lock);
-	list_add(&new->lru, &l->head);
-	l->count++;
-	spin_unlock(&l->lock);
+	spin_lock(&sl->lock);
+	list_add(&new->lru, &sl->head);
+	sl->count++;
+	spin_unlock(&sl->lock);
 }
 
-static void cb_free_one_page(void *_page)
+static void prep_new_page(struct page *page)
+{
+	set_page_private(page, 0);
+
+	VM_BUG_ON_PAGE(PageTail(page), page);
+	VM_BUG_ON_PAGE(page_ref_count(page), page);
+	set_page_count(page, 1);
+}
+
+/*
+ * This function intercept the last step of freeing a page.
+ * Since the pages inside our lists are in "allocated" state,
+ * thus we must take the steps to prepare a new page.
+ *
+ * page->index was set to migrate type already.
+ */
+static void cb_free_one_page(void *_page, int migrate_type)
 {
 	struct pgadvance_set *p = this_cpu_ptr(&pas);
-	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_ZERO];
+	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_NORMAL];
+	struct sublist *sl;
 	struct page *page = _page;
 
-	enqueue_page(l, page);
+	/*
+	 * Note in current impl, the migrate_type was checked
+	 * thus it MUST within PCPTYPEs range. We have this check
+	 * here to catch any future modifications.
+	 */
+	if (unlikely(migrate_type >= MIGRATE_PCPTYPES))
+		BUG();
+
+	sl = &l->lists[migrate_type];
+	prep_new_page(page);
+	enqueue_page(sl, page);
+	inc_stat(NR_FREE);
 }
+
+#define GFP_MOVABLE_MASK (__GFP_RECLAIMABLE|__GFP_MOVABLE)
+#define GFP_MOVABLE_SHIFT 3
+static inline int __gfpflags_to_migratetype(gfp_t gfp_flags)
+{
+	return (gfp_flags & GFP_MOVABLE_MASK) >> GFP_MOVABLE_SHIFT;
+}
+#undef GFP_MOVABLE_MASK
+#undef GFP_MOVABLE_SHIFT
 
 /*
  * Callback for do_anonymous_page()
  */
-static struct page *cb_alloc_zero_page(void)
+static struct page *cb_alloc_zero_page(gfp_t flags)
 {
 	struct pgadvance_set *p = this_cpu_ptr(&pas);
 	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_ZERO];
 	struct page *page;
+	int migrate_type;
+	struct sublist *sl;
 
-#if 0
-	if (unlikely(l->count <= l->watermark)) {
-		/*
-		 * Knob:
-		 *
-		 * do_anonymous_page() is super fast.
-		 * The async-refill is slow due to zeroing.
-		 * Thus sending one request per lower watermark incident
-		 * cannot keep up with the highest page fault rate.
-		 *
-		 * At this point, I'm not sure what would it be
-		 * for real applications. Let's leave this knobs open.
-		 */
-#if 0
-		if (!test_pgadvance_list_requested(l)) {
-			inc_stat(NR_REQUEST_REFILL_ZERO);
-
-			request_refill(PGADVANCE_TYPE_ZERO);
-			set_pgadvance_list_requested(l);
-		}
-#else
-		inc_stat(NR_REQUEST_REFILL_ZERO);
-		request_refill(PGADVANCE_TYPE_ZERO);
-#endif
+	migrate_type = __gfpflags_to_migratetype(flags);
+	if (unlikely(migrate_type >= MIGRATE_PCPTYPES)) {
+		pr_crit_once("%s(): type %d not supported\n",
+			__func__, migrate_type);
+		return alloc_page(flags | __GFP_ZERO);
 	}
-#endif
 
-	/*
-	 * This will happen only if remote is too slow or congested.
-	 * We can also refill by ourselves but that's too slow.
-	 * So fallback allocate one and return;
-	 */
-	if (unlikely(!l->count)) {
+	sl = &l->lists[migrate_type];
+	if (unlikely(!sl->count)) {
 		inc_stat(NR_SYNC_REFILL_ZERO);
-		return alloc_page(GFP_KERNEL | __GFP_ZERO | __GFP_MOVABLE);
+		return alloc_page(flags | __GFP_ZERO);
 	}
 
 	inc_stat(NR_PAGES_ALLOC_ZERO);
-
-	page = dequeue_page(l);
+	page = dequeue_page(sl);
 	return page;
 }
 
-static struct page *cb_alloc_normal_page(void)
+static struct page *cb_alloc_normal_page(gfp_t flags)
 {
 	struct pgadvance_set *p = this_cpu_ptr(&pas);
 	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_NORMAL];
 	struct page *page;
+	int migrate_type;
+	struct sublist *sl;
 
-	if (unlikely(l->count <= l->watermark)) {
-		/*
-		 * Knob:
-		 *
-		 * Well. This actually works well for do_cow_page()
-		 * I think mostly due to two reasons:
-		 * 1) The caller needs to copy_page, which is slow
-		 * 2) The server does not need to clear page.
-		 * With this two factors, it's actually enough
-		 * to just send one request per lower watermark incident.
-		 */
-#if 0
-		if (!test_pgadvance_list_requested(l)) {
-			inc_stat(NR_REQUEST_REFILL_NORMAL);
-
-			request_refill(PGADVANCE_TYPE_NORMAL);
-			set_pgadvance_list_requested(l);
-		}
-#else
-		inc_stat(NR_REQUEST_REFILL_NORMAL);
-		request_refill(PGADVANCE_TYPE_NORMAL);
-#endif
+	migrate_type = __gfpflags_to_migratetype(flags);
+	if (unlikely(migrate_type >= MIGRATE_PCPTYPES)) {
+		pr_crit_once("%s(): type %d not supported\n",
+			__func__, migrate_type);
+		return alloc_page(flags | __GFP_ZERO);
 	}
 
-	/*
-	 * This will happen only if remote is too slow or congested.
-	 * We can also refill by ourselves but that's too slow.
-	 * So fallback allocate one and return;
-	 */
-	if (unlikely(!l->count)) {
+	sl = &l->lists[migrate_type];
+	if (unlikely(!sl->count)) {
 		inc_stat(NR_SYNC_REFILL_NORMAL);
-		return alloc_page(GFP_KERNEL | __GFP_MOVABLE);
+		return alloc_page(flags | __GFP_ZERO);
 	}
 
 	inc_stat(NR_PAGES_ALLOC_NORMAL);
-
-	page = dequeue_page(l);
+	page = dequeue_page(sl);
 	return page;
 }
 
@@ -187,21 +178,26 @@ static int cal_batch(void)
 	return 16;
 }
 
-static void refill_list(struct pgadvance_list *l, int cpu,
-			enum pgadvance_list_type type, unsigned int nr_to_fill)
+static gfp_t refill_flags[] = {
+	GFP_KERNEL,
+	__GFP_MOVABLE,
+	__GFP_RECLAIMABLE,
+};
+
+static void
+refill_sublist(struct sublist *sl, enum migratetype mt, int cpu,
+	       enum pgadvance_list_type list_type, unsigned int nr_to_fill)
 {
 	int i, node;
 	struct page *page;
-	gfp_t flags = GFP_KERNEL | __GFP_MOVABLE;
+	gfp_t flags;
 	LIST_HEAD(new_pages);
 
-	nr_to_fill = min(nr_to_fill, l->high);
 	node = cpu_to_node(cpu);
+	nr_to_fill = min(nr_to_fill, sl->high);
 
-	//trace_printk("%s(): %d-%s nr_to_fill:%d cpu:%d node:%d\n",
-	//	__func__, current->pid, current->comm, nr_to_fill, cpu, node);
-
-	if (type == PGADVANCE_TYPE_ZERO)
+	flags = refill_flags[mt];
+	if (list_type == PGADVANCE_TYPE_ZERO)
 		flags |= __GFP_ZERO;
 
 	for (i = 0; i < nr_to_fill; i++) {
@@ -210,12 +206,11 @@ static void refill_list(struct pgadvance_list *l, int cpu,
 			WARN_ON_ONCE(1);
 			break;
 		}
-		//list_add(&page->lru, &new_pages);
 		__list_add(&page->lru, &new_pages, (&new_pages)->next);
 	}
 
 	inc_stat(NR_REFILLS_COMPLETED);
-	enqueue_pages(l, &new_pages, i);
+	enqueue_pages(sl, &new_pages, i);
 }
 
 DEFINE_PER_CPU(int, rr_counter);
@@ -241,110 +236,6 @@ retry:
 	return cpu;
 }
 
-static void request_refill(enum pgadvance_list_type type)
-{
-#if 0
-	int refill_cpu;
-	struct pgadvancers_work_pool *wpool;
-	struct pgadvancers_work_info winfo;
-	u64 *_bitmap;
-	u64 old, new, ret;
-	int index;
-
-	refill_cpu = choose_refill_cpu();
-	wpool = per_cpu_ptr(&pgadvancers_work_pool, refill_cpu);
-	_bitmap = &wpool->bitmap;
-
-	/* Reserve the slot */
-	for (;;) {
-		old = *_bitmap;
-
-		/* Remote slots are full */
-		if (unlikely(old == ~0UL)) {
-			inc_stat(NR_REQUEST_REFILL_FAILED);
-			return;
-		}
-
-		index = ffz(old);
-
-		new = old | (1ULL << index);
-		ret = cmpxchg(_bitmap, old, new);
-		if (ret == old)
-			break;
-
-	}
-
-	/* Then copy the work info */
-	winfo.request_cpu = smp_processor_id();
-	winfo.list_type = type | INTEGRITY_FLAG;
-	memcpy(&wpool->pool[index], &winfo, sizeof(winfo));
-
-	//wake_up_process(per_cpu(pgadvancers, refill_cpu));
-
-	//trace_printk("%s()-cpu%d: refill_cpu=%d, index=%d, bitmap=%#lx\n",
-	//	__func__, smp_processor_id(), refill_cpu, index, (unsigned long)*_bitmap);
-#endif
-}
-
-/*
- * Find a pending work by scanning bitmap.
- * We will reset the bitmap before do the actual dirty work.
- */
-static inline void handle_refill_work(struct pgadvancers_work_pool *wpool)
-{
-	struct pgadvancers_work_info winfo;
-	u64 *_bitmap = &wpool->bitmap;
-	int request_cpu;
-	enum pgadvance_list_type type;
-	struct pgadvance_set *ps;
-	struct pgadvance_list *pl;
-	int index;
-
-	for (;;) {
-		u64 old, new;
-
-		old = *_bitmap;
-		index = fls64(old);
-		if (unlikely(!index)) {
-			WARN_ON_ONCE(1);
-			return;
-		}
-		index -= 1;
-
-		/*
-		 * Grab the work info before reset the bitmap,
-		 * in case it got overrided immediately by another racing CPU.
-		 */
-retry:
-		memcpy(&winfo, &wpool->pool[index], sizeof(winfo));
-		if (unlikely(!(winfo.list_type & INTEGRITY_FLAG)))
-			goto retry;
-		memset(&wpool->pool[index], 0, sizeof(winfo));
-
-		new = old & ~(1ULL << index);
-		new = cmpxchg(_bitmap, old, new);
-		if (new == old)
-			break;
-	}
-
-	request_cpu = winfo.request_cpu;
-	type = winfo.list_type;
-
-	ps = per_cpu_ptr(&pas, request_cpu);
-	pl = &ps->lists[type];
-
-	/*
-	 * XXX Knob
-	 *
-	 * Shall we check if the list already high enough??
-	 * Really depends on the behavior how requests are sent out.
-	 */
-	if (pl->count < pl->high)
-		refill_list(pl, request_cpu, type, (pl->high - pl->count));
-
-	clear_pgadvance_list_requested(pl);
-}
-
 int pgadvance_wakeup_interval_s = 1;
 
 /* The background daemon */
@@ -358,15 +249,15 @@ static int pgadvancers_func(void *_unused)
 	wpool = this_cpu_ptr(&pgadvancers_work_pool);
 	current_cpu = smp_processor_id();
 	current_node = numa_node_id();
+
 	while (1) {
-		//set_current_state(TASK_INTERRUPTIBLE);
-		//schedule_timeout(pgadvance_wakeup_interval_s * HZ);
 		int cpu;
 
 		for_each_online_cpu(cpu) {
 			struct pgadvance_set *p = per_cpu_ptr(&pas, cpu);
 			struct pgadvance_list *l;
-			int type;
+			struct sublist *sl;
+			int list_type, mt, nr_refill;
 
 			if (cpu == 22 || cpu == 23)
 				continue;
@@ -374,23 +265,21 @@ static int pgadvancers_func(void *_unused)
 			if (cpu_to_node(cpu) != current_node)
 				continue;
 
-			for (type = 0; type < NR_PGADVANCE_TYPES; type++) {
-				l = &p->lists[type];
-				if (l->count <= 256)
-					refill_list(l, cpu, type, l->high - l->count);
+			for (list_type = 0; list_type < NR_PGADVANCE_TYPES; list_type++) {
+				l = &p->lists[list_type];
+				for (mt = 0; mt < MIGRATE_PCPTYPES; mt++) {
+					sl = &l->lists[mt];
+
+					nr_refill = sl->high - sl->count;
+					if (nr_refill > 0)
+						refill_sublist(sl, mt, cpu, list_type, nr_refill);
+				}
 			}
 		}
-		schedule();
-		//set_current_state(TASK_INTERRUPTIBLE);
-		//schedule_timeout(5);
-
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule_timeout(HZ);
 		if (kthread_should_stop())
 			break;
-
-		//while (likely(wpool->bitmap)) {
-		//	handle_refill_work(wpool);
-		//}
-
 	}
 	return 0;
 }
@@ -431,12 +320,12 @@ static int init_pgadvance_threads(void)
 }
 
 /* Free all pages of a given list */
-static void free_list(struct pgadvance_list *list)
+static void free_list(struct list_head *head)
 {
 	struct page *page;
 
-	while (!list_empty(&list->head)) {
-		page = list_first_entry(&list->head, struct page, lru);
+	while (!list_empty(head)) {
+		page = list_first_entry(head, struct page, lru);
 		list_del(&page->lru);
 		put_page(page);
 	}
@@ -444,16 +333,20 @@ static void free_list(struct pgadvance_list *list)
 
 static void free_percpu_sets(void)
 {
-	int cpu;
+	int cpu, mt;
 	enum pgadvance_list_type type;
 
 	for_each_possible_cpu(cpu) {
 		struct pgadvance_set *p = per_cpu_ptr(&pas, cpu);
 		struct pgadvance_list *l;
+		struct sublist *sl;
 
 		for (type = 0; type < NR_PGADVANCE_TYPES; type++) {
 			l = &p->lists[type];
-			free_list(l);
+			for (mt = 0; mt < MIGRATE_PCPTYPES; mt++) {
+				sl = &l->lists[mt];
+				free_list(&sl->head);
+			}
 		}
 	}
 }
@@ -465,7 +358,7 @@ static void free_percpu_sets(void)
 static int init_percpu_sets(void)
 {
 	enum pgadvance_list_type type;
-	int cpu, watermark, batch, high;
+	int mt, cpu, watermark, batch, high;
 
 	watermark = cal_watermark();
 	batch = cal_batch();
@@ -474,24 +367,19 @@ static int init_percpu_sets(void)
 	for_each_possible_cpu(cpu) {
 		struct pgadvance_set *p = per_cpu_ptr(&pas, cpu);
 		struct pgadvance_list *l;
+		struct sublist *sl;
 
 		for (type = 0; type < NR_PGADVANCE_TYPES; type++) {
 			l = &p->lists[type];
-
-			l->flags = 0;
-			l->count = 0;
-			l->high = high;
-			l->batch = batch;
-			l->watermark = watermark;
-			INIT_LIST_HEAD(&l->head);
-			spin_lock_init(&l->lock);
-
-			/*
-			 * Let's start from the high count.
-			 * During runtime, once it dropped below watermark,
-			 * it will ask for refill.
-			 */
-			refill_list(l, cpu, type, l->high);
+			for (mt = 0; mt < MIGRATE_PCPTYPES; mt++) {
+				sl = &l->lists[mt];
+				sl->count = 0;
+				sl->high = high;
+				sl->watermark = watermark;
+				spin_lock_init(&sl->lock);
+				INIT_LIST_HEAD(&sl->head);
+				refill_sublist(sl, mt, cpu, type, sl->high);
+			}
 		}
 	}
 	return 0;
@@ -514,6 +402,7 @@ static int pgadvance_init(void)
 	}
 
 	ret = register_pgadvance_callbacks(&pcb);
+	ret = 0;
 	if (ret) {
 		exit_pgadvance_threads();
 		free_percpu_sets();
@@ -544,8 +433,8 @@ static void pgadvance_exit(void)
 	exit_pgadvance_threads();
 	free_percpu_sets();
 
-	//set_cpu_active(22, true);
-	//set_cpu_active(23, true);
+	set_cpu_active(22, true);
+	set_cpu_active(23, true);
 }
 
 module_init(pgadvance_init);
