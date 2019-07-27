@@ -59,9 +59,6 @@ static inline void enqueue_page(struct sublist *sl, struct page *new)
 static void prep_new_page(struct page *page)
 {
 	set_page_private(page, 0);
-
-	VM_BUG_ON_PAGE(PageTail(page), page);
-	VM_BUG_ON_PAGE(page_ref_count(page), page);
 	set_page_count(page, 1);
 }
 
@@ -165,17 +162,12 @@ static struct pgadvance_callbacks pcb = {
 
 static int cal_high(void)
 {
-	return 512;
+	return 1024;
 }
 
 static int cal_watermark(void)
 {
-	return 300;
-}
-
-static int cal_batch(void)
-{
-	return 16;
+	return 512;
 }
 
 static gfp_t refill_flags[] = {
@@ -270,14 +262,16 @@ static int pgadvancers_func(void *_unused)
 				for (mt = 0; mt < MIGRATE_PCPTYPES; mt++) {
 					sl = &l->lists[mt];
 
-					nr_refill = sl->high - sl->count;
-					if (nr_refill > 0)
+					if (sl->count < 256) {
+						nr_refill = sl->high - sl->count;
 						refill_sublist(sl, mt, cpu, list_type, nr_refill);
+					}
 				}
 			}
 		}
 		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(HZ);
+		schedule_timeout(10);
+		//schedule();
 		if (kthread_should_stop())
 			break;
 	}
@@ -358,10 +352,9 @@ static void free_percpu_sets(void)
 static int init_percpu_sets(void)
 {
 	enum pgadvance_list_type type;
-	int mt, cpu, watermark, batch, high;
+	int mt, cpu, watermark, high;
 
 	watermark = cal_watermark();
-	batch = cal_batch();
 	high = cal_high();
 
 	for_each_possible_cpu(cpu) {
@@ -433,8 +426,8 @@ static void pgadvance_exit(void)
 	exit_pgadvance_threads();
 	free_percpu_sets();
 
-	set_cpu_active(22, true);
-	set_cpu_active(23, true);
+	//set_cpu_active(22, true);
+	//set_cpu_active(23, true);
 }
 
 module_init(pgadvance_init);
