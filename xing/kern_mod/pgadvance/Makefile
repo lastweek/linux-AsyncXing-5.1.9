@@ -4,7 +4,7 @@
 
 obj-m := pgadvance.o
 
-pgadvance-y := core.o proc.o stat.o
+pgadvance-y := core.o proc.o stat.o test.o
 
 # Targets
 all:

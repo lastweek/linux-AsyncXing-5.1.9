@@ -12,6 +12,7 @@
 
 #include <linux/compiler.h>
 #include <linux/kernel.h>
+#include <linux/pgadvance.h>
 
 enum pgadvance_list_type {
 	PGADVANCE_TYPE_ZERO,
@@ -105,5 +106,9 @@ static inline void inc_stat(enum pgadvance_stat_item item)
 {
 	this_cpu_inc(pgadvance_stats.stats[item]);
 }
+
+extern struct pgadvance_callbacks pcb;
+
+int eval_func(void);
 
 #endif /* _PAGEADVANCE_H_ */

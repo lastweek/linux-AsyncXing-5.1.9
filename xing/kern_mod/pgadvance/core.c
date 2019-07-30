@@ -72,7 +72,7 @@ static void prep_new_page(struct page *page)
 static void cb_free_one_page(void *_page, int migrate_type)
 {
 	struct pgadvance_set *p = this_cpu_ptr(&pas);
-	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_NORMAL];
+	struct pgadvance_list *l = &p->lists[PGADVANCE_TYPE_ZERO];
 	struct sublist *sl;
 	struct page *page = _page;
 
@@ -86,6 +86,8 @@ static void cb_free_one_page(void *_page, int migrate_type)
 
 	sl = &l->lists[migrate_type];
 	prep_new_page(page);
+
+	memset(page_to_virt(page), 0, PAGE_SIZE);
 	enqueue_page(sl, page);
 	inc_stat(NR_FREE);
 }
@@ -154,7 +156,7 @@ static struct page *cb_alloc_normal_page(gfp_t flags)
 	return page;
 }
 
-static struct pgadvance_callbacks pcb = {
+struct pgadvance_callbacks pcb = {
 	.alloc_zero_page	= cb_alloc_zero_page,
 	.alloc_normal_page	= cb_alloc_normal_page,
 	.free_one_page		= cb_free_one_page,
@@ -262,7 +264,7 @@ static int pgadvancers_func(void *_unused)
 				for (mt = 0; mt < MIGRATE_PCPTYPES; mt++) {
 					sl = &l->lists[mt];
 
-					if (sl->count < 256) {
+					if (sl->count < sl->watermark) {
 						nr_refill = sl->high - sl->count;
 						refill_sublist(sl, mt, cpu, list_type, nr_refill);
 					}
@@ -270,7 +272,7 @@ static int pgadvancers_func(void *_unused)
 			}
 		}
 		set_current_state(TASK_INTERRUPTIBLE);
-		schedule_timeout(10);
+		schedule_timeout(1);
 		//schedule();
 		if (kthread_should_stop())
 			break;
@@ -395,7 +397,6 @@ static int pgadvance_init(void)
 	}
 
 	ret = register_pgadvance_callbacks(&pcb);
-	ret = 0;
 	if (ret) {
 		exit_pgadvance_threads();
 		free_percpu_sets();
@@ -412,11 +413,16 @@ static int pgadvance_init(void)
 
 	set_cpu_active(22, false);
 	set_cpu_active(23, false);
+
+	set_cpu_active(10, false);
+	set_cpu_active(11, false);
 	return 0;
 }
 
 static void pgadvance_exit(void)
 {
+	//eval_func();
+
 	/*
 	 * Unregister first then deallocate resources
 	 * otherwise it might intermingle.
@@ -426,8 +432,10 @@ static void pgadvance_exit(void)
 	exit_pgadvance_threads();
 	free_percpu_sets();
 
-	//set_cpu_active(22, true);
-	//set_cpu_active(23, true);
+	set_cpu_active(22, true);
+	set_cpu_active(23, true);
+	set_cpu_active(10, true);
+	set_cpu_active(11, true);
 }
 
 module_init(pgadvance_init);

@@ -2234,6 +2234,26 @@ static inline void wp_page_reuse(struct vm_fault *vmf)
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 }
 
+static inline struct page *
+INTERCEPT_alloc_zeroed_user_highpage_movable(struct vm_area_struct *vma,
+					unsigned long vaddr)
+{
+	if (likely(pcb_live.alloc_zero_page))
+		return pcb_live.alloc_zero_page(__GFP_MOVABLE|GFP_HIGHUSER);
+	else
+		return alloc_zeroed_user_highpage_movable(vma, vaddr);
+}
+
+static inline struct page *
+INTERCEPT_alloc_page_vma(gfp_t flags, struct vm_area_struct *vma,
+			 unsigned long address)
+{
+	if (likely(pcb_live.alloc_normal_page))
+		return pcb_live.alloc_normal_page(flags);
+	else
+		return alloc_page_vma(flags, vma, address);
+}
+
 /*
  * Handle the case of a page which we actually need to copy to a new page.
  *
@@ -2266,13 +2286,13 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		goto oom;
 
 	if (is_zero_pfn(pte_pfn(vmf->orig_pte))) {
-		new_page = alloc_zeroed_user_highpage_movable(vma,
-							      vmf->address);
+		//new_page = alloc_zeroed_user_highpage_movable(vma, vmf->address);
+		new_page = INTERCEPT_alloc_zeroed_user_highpage_movable(vma, vmf->address);
 		if (!new_page)
 			goto oom;
 	} else {
-		new_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma,
-				vmf->address);
+		//new_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, vmf->address);
+		new_page = INTERCEPT_alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, vmf->address);
 		if (!new_page)
 			goto oom;
 		cow_user_page(new_page, old_page, vmf->address, vma);
@@ -2671,16 +2691,6 @@ void unmap_mapping_range(struct address_space *mapping,
 }
 EXPORT_SYMBOL(unmap_mapping_range);
 
-static inline struct page *
-INTERCEPT_alloc_page_vma(gfp_t flags, struct vm_area_struct *vma,
-			 unsigned long address)
-{
-	if (likely(pcb_live.alloc_normal_page))
-		return pcb_live.alloc_normal_page(flags);
-	else
-		return alloc_page_vma(flags, vma, address);
-}
-
 /*
  * We enter with non-exclusive mmap_sem (to exclude vma changes,
  * but allow concurrent faults), and pte mapped but not yet locked.
@@ -2903,16 +2913,6 @@ out_release:
 		put_page(swapcache);
 	}
 	return ret;
-}
-
-static inline struct page *
-INTERCEPT_alloc_zeroed_user_highpage_movable(struct vm_area_struct *vma,
-					unsigned long vaddr)
-{
-	if (likely(pcb_live.alloc_zero_page))
-		return pcb_live.alloc_zero_page(__GFP_MOVABLE|GFP_HIGHUSER);
-	else
-		return alloc_zeroed_user_highpage_movable(vma, vaddr);
 }
 
 /*

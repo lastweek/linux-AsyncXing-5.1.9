@@ -24,6 +24,8 @@
 
 #include <asm/pgtable.h>
 
+#include <linux/pgadvance.h>
+
 /*
  * swapper_space is a fiction, retained to simplify the path through
  * vmscan's shrink_page_list.
@@ -350,6 +352,16 @@ struct page *lookup_swap_cache(swp_entry_t entry, struct vm_area_struct *vma,
 	return page;
 }
 
+static inline struct page *
+INTERCEPT_alloc_page_vma(gfp_t flags, struct vm_area_struct *vma,
+			 unsigned long address)
+{
+	if (likely(pcb_live.alloc_normal_page))
+		return pcb_live.alloc_normal_page(flags);
+	else
+		return alloc_page_vma(flags, vma, address);
+}
+
 struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 			struct vm_area_struct *vma, unsigned long addr,
 			bool *new_page_allocated)
@@ -384,7 +396,8 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		 * Get a new page to read into from swap.
 		 */
 		if (!new_page) {
-			new_page = alloc_page_vma(gfp_mask, vma, addr);
+			//new_page = alloc_page_vma(gfp_mask, vma, addr);
+			new_page = INTERCEPT_alloc_page_vma(gfp_mask, vma, addr);
 			if (!new_page)
 				break;		/* Out of memory */
 		}
