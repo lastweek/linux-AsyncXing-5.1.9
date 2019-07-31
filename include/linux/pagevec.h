@@ -14,6 +14,8 @@
 /* 15 pointers + header align the pagevec structure to a power of two */
 #define PAGEVEC_SIZE	15
 
+extern int pagevec_size_var;
+
 struct page;
 struct address_space;
 
@@ -87,5 +89,7 @@ static inline void pagevec_release(struct pagevec *pvec)
 	if (pagevec_count(pvec))
 		__pagevec_release(pvec);
 }
+
+void __pagevec_lru_add_fn(struct page *page, struct lruvec *lruvec, void *arg);
 
 #endif /* _LINUX_PAGEVEC_H */

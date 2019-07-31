@@ -510,6 +510,7 @@ mem_cgroup_page_nodeinfo(struct mem_cgroup *memcg, struct page *page)
 
 	return memcg->nodeinfo[nid];
 }
+EXPORT_SYMBOL(mem_cgroup_page_nodeinfo);
 
 static struct mem_cgroup_tree_per_node *
 soft_limit_tree_node(int nid)
@@ -1135,6 +1136,7 @@ out:
 		lruvec->pgdat = pgdat;
 	return lruvec;
 }
+EXPORT_SYMBOL(mem_cgroup_page_lruvec);
 
 /**
  * mem_cgroup_update_lru_size - account for adding or removing an lru page

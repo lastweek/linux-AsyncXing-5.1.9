@@ -20,6 +20,7 @@
 #include <linux/mman.h>
 #include <linux/pagemap.h>
 #include <linux/pagevec.h>
+#include <linux/pagevec_ms.h>
 #include <linux/init.h>
 #include <linux/export.h>
 #include <linux/mm_inline.h>
@@ -42,6 +43,15 @@
 
 /* How many pages do we try to swap or page in/out together? */
 int page_cluster;
+
+int pagevec_size_var ____cacheline_aligned = PAGEVEC_SIZE;
+EXPORT_SYMBOL(pagevec_size_var);
+
+DEFINE_PER_CPU(struct pagevec_ms, lru_add_ms);
+EXPORT_SYMBOL(lru_add_ms);
+
+bool lru_ms_registered = false;
+EXPORT_SYMBOL(lru_ms_registered);
 
 static DEFINE_PER_CPU(struct pagevec, lru_add_pvec);
 static DEFINE_PER_CPU(struct pagevec, lru_rotate_pvecs);
@@ -331,6 +341,10 @@ void activate_page(struct page *page)
 }
 #endif
 
+/*
+ * HACK: LRU MS
+ * It shouldn't hurt, right?
+ */
 static void __lru_cache_activate_page(struct page *page)
 {
 	struct pagevec *pvec = &get_cpu_var(lru_add_pvec);
@@ -395,7 +409,16 @@ void mark_page_accessed(struct page *page)
 }
 EXPORT_SYMBOL(mark_page_accessed);
 
-static void __lru_cache_add(struct page *page)
+static inline void default_ms_cb__lru_add_drain_cpu(int cpu)
+{
+	/* Do nothing */
+}
+
+/*
+ * Actually the original __lru_cache_add() code
+ */
+static __always_inline void
+default_ms_cb__lru_cache_add(struct page *page)
 {
 	struct pagevec *pvec = &get_cpu_var(lru_add_pvec);
 
@@ -403,6 +426,29 @@ static void __lru_cache_add(struct page *page)
 	if (!pagevec_add(pvec, page) || PageCompound(page))
 		__pagevec_lru_add(pvec);
 	put_cpu_var(lru_add_pvec);
+}
+
+struct lru_ms_callback lru_ms_callback = {
+	.__lru_cache_add	= default_ms_cb__lru_cache_add,
+	.lru_add_drain_cpu	= default_ms_cb__lru_add_drain_cpu,
+};
+
+void register_lru_ms_callback(struct lru_ms_callback *cb)
+{
+	memcpy(&lru_ms_callback, cb, sizeof(*cb));
+}
+EXPORT_SYMBOL(register_lru_ms_callback);
+
+void unregister_lru_ms_callback(void)
+{
+	lru_ms_callback.__lru_cache_add = default_ms_cb__lru_cache_add;
+	lru_ms_callback.lru_add_drain_cpu = default_ms_cb__lru_add_drain_cpu;
+}
+EXPORT_SYMBOL(unregister_lru_ms_callback);
+
+static __always_inline void __lru_cache_add(struct page *page)
+{
+	lru_ms_callback.__lru_cache_add(page);
 }
 
 /**
@@ -575,6 +621,12 @@ void lru_add_drain_cpu(int cpu)
 	if (pagevec_count(pvec))
 		__pagevec_lru_add(pvec);
 
+	/*
+	 * HACK for LRU MS
+	 * Default is no-op
+	 */
+	lru_ms_callback.lru_add_drain_cpu(cpu);
+
 	pvec = &per_cpu(lru_rotate_pvecs, cpu);
 	if (pagevec_count(pvec)) {
 		unsigned long flags;
@@ -705,6 +757,7 @@ void lru_add_drain_all(void)
 	lru_add_drain();
 }
 #endif
+EXPORT_SYMBOL(lru_add_drain_all);
 
 /**
  * release_pages - batched put_page()
@@ -856,8 +909,7 @@ void lru_add_page_tail(struct page *page, struct page *page_tail,
 }
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
 
-static void __pagevec_lru_add_fn(struct page *page, struct lruvec *lruvec,
-				 void *arg)
+void __pagevec_lru_add_fn(struct page *page, struct lruvec *lruvec, void *arg)
 {
 	enum lru_list lru;
 	int was_unevictable = TestClearPageUnevictable(page);
@@ -910,6 +962,7 @@ static void __pagevec_lru_add_fn(struct page *page, struct lruvec *lruvec,
 	add_page_to_lru_list(page, lruvec, lru);
 	trace_mm_lru_insertion(page, lru);
 }
+EXPORT_SYMBOL(__pagevec_lru_add_fn);
 
 /*
  * Add the passed pages to the LRU, then drop the caller's refcount
