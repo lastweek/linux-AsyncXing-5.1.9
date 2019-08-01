@@ -7,6 +7,22 @@
  * (at your option) any later version.
  */
 
+/*
+ * TODO (Aug 1 2019)
+ *
+ * 1) Instead of using page->lru to link pages together,
+ * we should use a per-cpu ring buffer, much cheaper.
+ *
+ * 2) cb_free_one_page(): which list to use is questionable.
+ * 3) Related to 2), the MS thread should balance the count
+ * if one gets too high.
+ * 4) Model: can each CPU ask for help when count < watermark?
+ * Or just reply on MS thread to check?
+ *
+ * Anyhow, there are many questions left. This code is just a PoC.
+ * Above extentions are very engineering-y.
+ */
+
 #include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
