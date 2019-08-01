@@ -9,4 +9,4 @@ clean:
 	rm -f *.o
 
 %.o: %.c
-	gcc -O3 -o $@ $< -lm -pthread -fomit-frame-pointer
+	gcc -g -O3 -o $@ $< -lm -pthread -fomit-frame-pointer
