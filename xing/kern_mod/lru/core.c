@@ -19,44 +19,52 @@
 #include <linux/memcontrol.h>
 #include <linux/swap.h>
 
-/*
- * Add a page into its LRU vector.
- * This is similar to the original __lru_cache_add().
- */
-static void add_page_to_lru(struct page *page)
-{
-	struct pglist_data *pgdat;
-	struct lruvec *lruvec;
-	unsigned long flags;
-
-	pgdat = page_pgdat(page);
-	spin_lock_irqsave(&pgdat->lru_lock, flags);
-	lruvec = mem_cgroup_page_lruvec(page, pgdat);
-	__pagevec_lru_add_fn(page, lruvec, NULL);
-	spin_unlock_irqrestore(&pgdat->lru_lock, flags);
-}
+#include "core.h"
 
 /*
- * Drain cached pages of @cpu into their LRU vector
+ * Drain cached pages of @cpu into their LRU vector.
+ * This is a modified version of pagevec_lru_move_fn().
  */
 static inline void drain_lru_ms_cpu(int cpu)
 {
 	struct pagevec_ms *pvec = per_cpu_ptr(&lru_add_ms, cpu);
-	struct page *page;
+	struct pglist_data *pgdat = NULL;
+	struct lruvec *lruvec;
+	unsigned long flags = 0;
 	int count = 0;
 
 	while (pagevec_ms_has_page(pvec)) {
-		page = pagevec_ms_dequeue(pvec);
-		add_page_to_lru(page);
+		struct page *page = pagevec_ms_dequeue(pvec);
+		struct pglist_data *pagepgdat = page_pgdat(page);
+
+		if (pagepgdat != pgdat) {
+			if (pgdat)
+				spin_unlock_irqrestore(&pgdat->lru_lock, flags);
+			pgdat = pagepgdat;
+			spin_lock_irqsave(&pgdat->lru_lock, flags);
+		}
+
+		lruvec = mem_cgroup_page_lruvec(page, pgdat);
+		__pagevec_lru_add_fn(page, lruvec, NULL);
 
 		if (count++ >= NR_PAGEVEC_MS)
 			break;
 	}
+	if (pgdat)
+		spin_unlock_irqrestore(&pgdat->lru_lock, flags);
+
+	//TODO release pages
 }
 
 static void cb__lru_add_drain_cpu(int cpu)
 {
-	drain_lru_ms_cpu(cpu);
+	inc_stat(NR_DRAIN);
+
+	/*
+	 * TODO
+	 * Can't do this without protecting TAIL
+	 */
+	//drain_lru_ms_cpu(cpu);
 }
 
 /* Callback for the real __lru_cache_add() */
@@ -78,9 +86,11 @@ static void cb__lru_cache_add(struct page *page)
 		lruvec = mem_cgroup_page_lruvec(page, pgdat);
 		__pagevec_lru_add_fn(page, lruvec, NULL);
 		spin_unlock_irqrestore(&pgdat->lru_lock, flags);
+		inc_stat(NR_ADD_FALLBACK);
 	} else {
 		get_page(page);
 		pagevec_ms_enqueue(pvec, page);
+		inc_stat(NR_ADD_CACHE);
 	}
 	put_cpu_var(lru_add_ms);
 }
@@ -113,15 +123,9 @@ static void reset_lru_ms(void)
 static void run_lru_ms(void)
 {
 	int cpu;
-	for_each_online_cpu(cpu) {
-		struct pagevec_ms *pvec = per_cpu_ptr(&lru_add_ms, cpu);
-		struct page *page;
 
-		while (pagevec_ms_has_page(pvec)) {
-			page = pagevec_ms_dequeue(pvec);
-			add_page_to_lru(page);
-		}
-	}
+	for_each_online_cpu(cpu)
+		drain_lru_ms_cpu(cpu);
 }
 
 static int lru_microservice_func(void *_unused)
@@ -133,6 +137,8 @@ static int lru_microservice_func(void *_unused)
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule_timeout(1);
 		run_lru_ms();
+
+		inc_stat(NR_KLRUMS_RUN);
 		if (kthread_should_stop())
 			break;
 	}
@@ -172,9 +178,17 @@ static int lru_ms_init(void)
 	reset_lru_ms();
 	register_lru_ms_callback(&cb);
 
+	ret = create_proc_files();
+	if (ret) {
+		pr_err("Fail to create proc file.");
+		unregister_lru_ms_callback();
+		return ret;
+	}
+
 	ret = create_thread();
 	if (ret) {
 		pr_err("Fail to create thread");
+		remove_proc_files();
 		unregister_lru_ms_callback();
 		return ret;
 	}
@@ -192,9 +206,8 @@ static void destroy_thread(void)
 static void drain_lru_ms_all(void)
 {
 	int cpu;
-	for_each_online_cpu(cpu) {
+	for_each_online_cpu(cpu)
 		drain_lru_ms_cpu(cpu);
-	}
 }
 
 static void lru_ms_exit(void)
@@ -209,6 +222,7 @@ static void lru_ms_exit(void)
 	unregister_lru_ms_callback();
 	drain_lru_ms_all();
 	reset_lru_ms();
+	remove_proc_files();
 }
 
 module_init(lru_ms_init);

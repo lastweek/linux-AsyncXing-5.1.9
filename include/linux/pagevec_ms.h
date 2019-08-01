@@ -13,7 +13,16 @@ extern struct lru_ms_callback lru_ms_callback;
 void register_lru_ms_callback(struct lru_ms_callback *cb);
 void unregister_lru_ms_callback(void);
 
+/*
+ * HACK!
+ *
+ * For now, you must recompile kernel if you change this.
+ * Because the percpu array is defined in kernel..
+ * 
+ * A better way, is to allocate during module install. Later.
+ */
 #define NR_PAGEVEC_MS 128
+
 struct pagevec_ms {
 	/*
 	 * Head is the current available spot

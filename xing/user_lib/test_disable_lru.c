@@ -227,13 +227,13 @@ int main(void)
 
 	printf(" ** Optmized Pgfault **\n");
 	test_pgfault_latency();
-	test_pgfault_latency();
+	//test_pgfault_latency();
 
 	unset_async_crossing(&aci);
 
 normal:
 	printf(" ** Normal Pgfault **\n");
-	//test_pgfault_latency();
+	test_pgfault_latency();
 	//test_pgfault_latency();
 
 	return 0;

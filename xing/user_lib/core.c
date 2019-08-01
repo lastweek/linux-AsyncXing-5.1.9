@@ -211,7 +211,7 @@ int main(void)
 
 	setbuf(stdout, NULL);
 
-	pin_cpu(23);
+	pin_cpu(21);
 	getcpu(&cpu, &node);
 	printf("Running on cpu: %d, node: %d\n", cpu, node);
 
