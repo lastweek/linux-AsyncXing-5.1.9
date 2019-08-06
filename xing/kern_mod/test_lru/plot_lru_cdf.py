@@ -143,7 +143,7 @@ ax.set_xlabel('Latency (Cycles)')
 ax.set_ylabel('CDF')
 
 ax.set_xlim(left=0)
-ax.set_ylim([0, 1])
+ax.set_ylim([0.8, 1])
 
 #
 # Now the bar Axe

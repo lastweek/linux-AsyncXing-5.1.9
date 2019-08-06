@@ -1,3 +1,4 @@
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backends.backend_pdf import PdfPages
@@ -143,7 +144,7 @@ ax.set_xlabel('Latency (Cycles)')
 ax.set_ylabel('CDF')
 
 ax.set_xlim(left=0)
-ax.set_ylim([0, 1])
+ax.set_ylim([0.5, 1])
 
 #
 # Now the bar Axe
