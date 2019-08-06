@@ -92,4 +92,6 @@ static inline void pagevec_release(struct pagevec *pvec)
 
 void __pagevec_lru_add_fn(struct page *page, struct lruvec *lruvec, void *arg);
 
+void __lru_cache_add(struct page *page);
+
 #endif /* _LINUX_PAGEVEC_H */

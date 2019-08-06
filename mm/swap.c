@@ -446,10 +446,11 @@ void unregister_lru_ms_callback(void)
 }
 EXPORT_SYMBOL(unregister_lru_ms_callback);
 
-static __always_inline void __lru_cache_add(struct page *page)
+void __lru_cache_add(struct page *page)
 {
 	lru_ms_callback.__lru_cache_add(page);
 }
+EXPORT_SYMBOL(__lru_cache_add);
 
 /**
  * lru_cache_add_anon - add a page to the page lists
