@@ -23,17 +23,6 @@ int default_dummy_asyncx_syscall(int cmd, struct async_crossing_info __user * ui
 EXPORT_SYMBOL(default_dummy_asyncx_syscall);
 
 /*
- * This is post pgfault where everything has been handled already.
- * We used this during early stage of development.
- */
-void default_dummy_asyncx_post_pgfault(struct pt_regs *regs,
-				       unsigned long address)
-{
-
-}
-EXPORT_SYMBOL(default_dummy_asyncx_post_pgfault);
-
-/*
  * This is called before any actual pgfault handling.
  */
 enum intercept_result
@@ -54,16 +43,16 @@ EXPORT_SYMBOL(default_dummy_measure_crossing_latency);
 static const struct asyncx_callbacks acb_default = {
 	.syscall			= default_dummy_asyncx_syscall,
 	.intercept_do_page_fault	= default_dummy_intercept,
+	.pre_pgfault_callback		= default_dummy_asyncx_post_pgfault,
 	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
-	.measure_crossing_latency	= default_dummy_measure_crossing_latency,
 };
 
 /* Used during runtime */
 struct asyncx_callbacks acb_live = {
 	.syscall			= default_dummy_asyncx_syscall,
 	.intercept_do_page_fault	= default_dummy_intercept,
+	.pre_pgfault_callback		= default_dummy_asyncx_post_pgfault,
 	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
-	.measure_crossing_latency	= default_dummy_measure_crossing_latency,
 };
 
 SYSCALL_DEFINE2(async_crossing, int, cmd, struct async_crossing_info __user *, uinfo)

@@ -182,7 +182,8 @@ static int worker_thread_func(void *_unused)
 
 		if (kthread_should_stop())
 			break;
-		//touch_nmi_watchdog();
+
+		set_current_state(TASK_INTERRUPTIBLE);
 		schedule_timeout(10 * HZ);
 	}
 
@@ -258,52 +259,34 @@ cb_intercept_do_page_fault(struct pt_regs *regs, struct vm_area_struct *vma,
 	return ASYNCX_PGFAULT_INTERCEPTED;
 }
 
-/*
- * Used to measure the kernel to user crossing overhead
- * Note that this is not a pure corssing latency, rather,
- * it includes some overhead to pop registers in entry_64.S
- */
-__used
-static void cb_measure_crossing_latency(struct pt_regs *regs)
+static void cb_post_page_fault(struct pt_regs *regs)
 {
-	if (likely(current->aci))
-		*(unsigned long *)(regs->sp) = rdtsc_ordered();
+	struct async_crossing_info *aci;
+
+	aci = current->aci;
+	if (likely(aci)) {
+		if (likely(aci->flags & FLAG_ENABLE_POST_FAULT))
+			*(unsigned long *)(regs->sp) = rdtsc_ordered();
+	}
 }
 
-__used
-static void cb_post_page_fault(struct pt_regs *regs, unsigned long address)
+static void cb_pre_page_fault(struct pt_regs *regs)
 {
-	if (likely(current->aci))
-		*(unsigned long *)(regs->sp) = rdtsc_ordered();
+	struct async_crossing_info *aci;
+
+	aci = current->aci;
+	if (likely(aci)) {
+		if (likely(aci->flags & FLAG_ENABLE_PRE_FAULT))
+			*(unsigned long *)(regs->sp) = rdtsc_ordered();
+	}
 }
 
 static struct asyncx_callbacks cb = {
 	.syscall			= cb_syscall,
 	.intercept_do_page_fault	= cb_intercept_do_page_fault,
 
-	/* DO NOT ENABLE MEASUREMENT */
-	.post_pgfault_callback		= default_dummy_asyncx_post_pgfault,
-	.measure_crossing_latency	= default_dummy_measure_crossing_latency,
-};
-
-/*
- * This dummy callback sets is mainly for testing.
- * It should NOT intercept any pgfault, rather, it only
- * provide the syscall interface. We use the tsk->aci
- * to do some other nasty hacking.
- */
-__used
-static struct asyncx_callbacks measure_cb = {
-	.syscall			= cb_syscall,
-	.intercept_do_page_fault	= default_dummy_intercept,
-
-	/*
-	 * Both the following callback can do measures
-	 * the post_pgfault_callback() somehow should
-	 * give us a more precise one.
-	 */
+	.pre_pgfault_callback		= cb_pre_page_fault,
 	.post_pgfault_callback		= cb_post_page_fault,
-	.measure_crossing_latency	= default_dummy_measure_crossing_latency,
 };
 
 struct task_struct *worker_thread;
@@ -338,13 +321,12 @@ static int core_init(void)
 	int ret;
 
 	ret = register_asyncx_callbacks(&cb);
-	//ret = register_asyncx_callbacks(&measure_cb);
 	if (ret) {
 		pr_err("Fail to register asyncx callbacks.");
 		return ret;
 	}
 
-	ret = init_asyncx_thread();
+	//ret = init_asyncx_thread();
 	if (ret) {
 		pr_err("Fail to init delegate thread.");
 		unregister_asyncx_callbacks(&cb);

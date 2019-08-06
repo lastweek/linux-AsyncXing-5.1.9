@@ -32,16 +32,20 @@ struct asyncx_callbacks {
 						   unsigned long address,
 						   unsigned int flags);
 
-	void		(*post_pgfault_callback)(struct pt_regs *, unsigned long);
-
-	void		(*measure_crossing_latency)(struct pt_regs *);
+	void		(*pre_pgfault_callback)(struct pt_regs *);
+	void		(*post_pgfault_callback)(struct pt_regs *);
 };
 
 /* Public API for modules */
 int register_asyncx_callbacks(struct asyncx_callbacks *cb);
 int unregister_asyncx_callbacks(struct asyncx_callbacks *cb);
 
-void default_dummy_asyncx_post_pgfault(struct pt_regs *regs, unsigned long address);
+static inline void
+default_dummy_asyncx_post_pgfault(struct pt_regs *regs)
+{
+
+}
+
 int default_dummy_asyncx_syscall(int cmd, struct async_crossing_info __user * uinfo);
 void default_dummy_measure_crossing_latency(struct pt_regs *regs);
 
@@ -56,9 +60,19 @@ extern struct asyncx_callbacks acb_live;
  * to return to userspace.
  */
 static inline void
-asyncx_post_pgfault(struct pt_regs *regs, unsigned long address)
+asyncx_post_pgfault(struct pt_regs *regs)
 {
-	acb_live.post_pgfault_callback(regs, address);
+	acb_live.post_pgfault_callback(regs);
+}
+
+/*
+ * Called when pgfault has finished processing and prepared
+ * to return to userspace.
+ */
+static inline void
+asyncx_pre_pgfault(struct pt_regs *regs)
+{
+	acb_live.pre_pgfault_callback(regs);
 }
 
 /*
@@ -71,12 +85,6 @@ asyncx_intercept_do_page_fault(struct pt_regs *regs,
 			       unsigned int flags)
 {
 	return acb_live.intercept_do_page_fault(regs, vma, address, flags);
-}
-
-static inline void
-asyncx_measure_crossing_latency(struct pt_regs *regs)
-{
-	return acb_live.measure_crossing_latency(regs);
 }
 
 /*

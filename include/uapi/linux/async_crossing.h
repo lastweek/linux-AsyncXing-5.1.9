@@ -10,6 +10,9 @@
 #ifndef _LINUX_UAPI_ASYNC_CROSSING_H_
 #define _LINUX_UAPI_ASYNC_CROSSING_H_
 
+/*
+ * SYSCALL flags
+ */
 enum async_crossing_cmd {
 	ASYNCX_SET,
 	ASYNCX_UNSET,
@@ -19,9 +22,13 @@ enum async_crossing_cmd {
 /*
  * Per-thread information.
  * Set by async_crossing SYSCALL.
+ *
+ * Control each specific callback's behavior
  */
 #define FLAG_DISABLE_PGFAULT_INTERCEPT	0x1
 #define FLAG_DISABLE_LRU		0x2
+#define FLAG_ENABLE_PRE_FAULT		0x4
+#define FLAG_ENABLE_POST_FAULT		0x8
 
 struct async_crossing_info {
 	unsigned long flags;

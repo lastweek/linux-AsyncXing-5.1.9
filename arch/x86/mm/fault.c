@@ -1509,18 +1509,6 @@ good_area:
 
 	up_read(&mm->mmap_sem);
 
-	/*
-	 * HACK:
-	 * If we have delegation, this is the point where the handling CPU
-	 * will notify the faulting CPU.
-	 *
-	 * For here to userspace, this is the period we are trying to optimize.
-	 * For us, if we have a win, it means:
-	 * 	this period > (delegtion + notification)
-	 */
-	if (user_mode(regs) && current->aci)
-		asyncx_measure_crossing_latency(regs);
-
 	if (unlikely(fault & VM_FAULT_ERROR)) {
 		mm_fault_error(regs, hw_error_code, address, fault);
 		return;
@@ -1588,6 +1576,14 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
 	unsigned long address = read_cr2(); /* Get the faulting address */
 	enum ctx_state prev_state;
 
+	/*
+	 * HACK: Async Crossing
+	 *
+	 * Measure the xing + save_regs overhead
+	 */
+	if (user_mode(regs))
+		asyncx_pre_pgfault(regs);
+
 	prev_state = exception_enter();
 	if (trace_pagefault_enabled())
 		trace_page_fault_entries(address, regs, error_code);
@@ -1597,10 +1593,10 @@ do_page_fault(struct pt_regs *regs, unsigned long error_code)
 
 	/*
 	 * HACK: Async Crossing
-	 * We should only do this for pgfaults came from
-	 * userspace which will also return to userspace.
+	 *
+	 * Measure the restore_regs + xing overhead
 	 */
 	if (user_mode(regs))
-		asyncx_post_pgfault(regs, address);
+		asyncx_post_pgfault(regs);
 }
 NOKPROBE_SYMBOL(do_page_fault);
